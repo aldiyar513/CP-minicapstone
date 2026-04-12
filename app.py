@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
+import os
 from pathlib import Path
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
@@ -37,6 +38,15 @@ VALID_ETA_STATES = {"checked_in", "arriving_soon", "on_track", "delayed"}
 STATUS_PRIORITY = {"joined": 0, "interested": 1, "waitlist": 2}
 
 db = SQLAlchemy()
+
+
+def get_database_uri() -> str:
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if database_url:
+        if database_url.startswith("postgres://"):
+            return database_url.replace("postgres://", "postgresql://", 1)
+        return database_url
+    return f"sqlite:///{DEFAULT_DB_PATH}"
 
 
 def utcnow() -> datetime:
@@ -145,8 +155,8 @@ def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__)
     DEFAULT_DB_PATH.parent.mkdir(exist_ok=True)
     app.config.from_mapping(
-        SECRET_KEY="dev-secret-key",
-        SQLALCHEMY_DATABASE_URI=f"sqlite:///{DEFAULT_DB_PATH}",
+        SECRET_KEY=os.getenv("SECRET_KEY", "dev-secret-key"),
+        SQLALCHEMY_DATABASE_URI=get_database_uri(),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
     )
     if test_config:
@@ -1178,4 +1188,7 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.getenv("PORT", "5000"))
+    host = os.getenv("HOST", "0.0.0.0")
+    debug = os.getenv("FLASK_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+    app.run(host=host, port=port, debug=debug)
