@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block title %}EventMatch | Activity Feed{% endblock %}
+
+{% block content %}
+<section class="hero hero-grid">
+  <div class="hero-copy-wrap">
+    <p class="eyebrow">Student activities in one place</p>
+    <h1>Find people in your city who are already ready to go.</h1>
+    <p class="hero-copy">
+      EventMatch keeps the activity feed, role coverage, attendance, chat, and live GPS ETA in one clean place.
+    </p>
+    <div class="hero-signals">
+      <span>Live attendance state</span>
+      <span>Role-aware capacity</span>
+      <span>Activity-level chat</span>
+    </div>
+    <div class="hero-actions">
+      <a class="primary-button" href="{{ url_for('create_activity') }}">Create an activity</a>
+      <a class="secondary-button" href="{{ url_for('profile') }}">Open my profile</a>
+    </div>
+  </div>
+  <aside class="hero-panel card">
+    <p class="section-label">Your snapshot</p>
+    <h2>{{ current_user.name }}</h2>
+    <p>{{ current_user.city }} • Reliability {{ current_user.stats.reliability }}</p>
+    <div class="stats-grid compact-stats">
+      <div class="stat-card">
+        <span>Joined</span>
+        <strong>{{ current_user.stats.joined }}</strong>
+      </div>
+      <div class="stat-card">
+        <span>Hosted</span>
+        <strong>{{ current_user.stats.hosted }}</strong>
+      </div>
+      <div class="stat-card">
+        <span>Reliability</span>
+        <strong>{{ current_user.stats.reliability }}</strong>
+      </div>
+    </div>
+    <div class="tracking-note">
+      <strong>GPS ETA</strong>
+      <p>{{ current_user.gps_tracking }}</p>
+    </div>
+  </aside>
+</section>
+
+<section class="filters card">
+  <div>
+    <p class="section-label">Filters</p>
+    <h2>Find the right plan for today or this weekend</h2>
+  </div>
+  <form class="filter-form" method="get">
+    <label>
+      Category
+      <select name="category">
+        {% for category in categories %}
+        <option value="{{ category }}" {% if category == selected_category %}selected{% endif %}>{{ category }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Date
+      <input type="date" name="date" value="{{ selected_date }}" min="{{ today }}">
+    </label>
+    <button class="secondary-button" type="submit">Apply</button>
+  </form>
+</section>
+
+<section class="activity-grid">
+  {% for activity in activities %}
+  <article class="card activity-card">
+    <div class="activity-card-top">
+      <div class="activity-meta">
+        <span class="pill">{{ activity.category }}</span>
+        <span>{{ activity.date }} • {{ activity.time }}</span>
+      </div>
+      <span class="signal-badge">{{ activity.status }}</span>
+    </div>
+    <h3>{{ activity.title }}</h3>
+    <p>{{ activity.description }}</p>
+    <dl class="info-list">
+      <div>
+        <dt>Location</dt>
+        <dd>{{ activity.location }}</dd>
+      </div>
+      <div>
+        <dt>Host</dt>
+        <dd>{{ activity.host }}</dd>
+      </div>
+      <div>
+        <dt>Capacity</dt>
+        <dd>{{ activity.joined }}/{{ activity.capacity }} joined</dd>
+      </div>
+      <div>
+        <dt>Interested</dt>
+        <dd>{{ activity.interested }}</dd>
+      </div>
+      <div>
+        <dt>Min reliability</dt>
+        <dd>{{ activity.reliability.minimum }}</dd>
+      </div>
+    </dl>
+    <div class="role-stack">
+      {% for role in activity.roles %}
+      <span class="role-pill {{ role.type }}">{{ role.name }}: {{ role.filled }}/{{ role.needed }}</span>
+      {% endfor %}
+    </div>
+    <div class="eta-strip">
+      <span>Arriving soon: {{ activity.eta_summary.arriving_soon }}</span>
+      <span>On track: {{ activity.eta_summary.on_track }}</span>
+      <span>Delayed: {{ activity.eta_summary.delayed }}</span>
+    </div>
+    <div class="card-actions">
+      <a class="primary-button" href="{{ url_for('activity_detail', activity_id=activity.id) }}">View activity</a>
+      {% if activity.viewer_is_host %}
+      <a class="secondary-button" href="{{ url_for('host_dashboard', activity_id=activity.id) }}">Host view</a>
+      {% elif activity.viewer_status == "joined" %}
+      <form method="post" action="{{ url_for('leave_activity', activity_id=activity.id) }}">
+        <button class="secondary-button" type="submit">Leave</button>
+      </form>
+      {% elif activity.viewer_status == "interested" %}
+      <form method="post" action="{{ url_for('join_activity', activity_id=activity.id) }}">
+        <button class="secondary-button" type="submit">Join now</button>
+      </form>
+      {% elif activity.viewer_status == "waitlist" %}
+      <form method="post" action="{{ url_for('leave_activity', activity_id=activity.id) }}">
+        <button class="secondary-button" type="submit">Leave waitlist</button>
+      </form>
+      {% else %}
+      <form method="post" action="{{ url_for('mark_interest', activity_id=activity.id) }}">
+        <button class="secondary-button" type="submit">Interested</button>
+      </form>
+      {% endif %}
+    </div>
+    {% if activity.viewer_status != "none" %}
+    <p class="status-note">Your status: {{ activity.viewer_status|replace("_", " ")|title }}</p>
+    {% endif %}
+  </article>
+  {% else %}
+  <article class="card empty-state">
+    <h3>No activities match these filters.</h3>
+    <p>Try another date or reset the category filter.</p>
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}

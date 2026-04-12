@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+
+{% block title %}EventMatch | Host Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">Host dashboard</p>
+  <h1>{{ activity.title }}</h1>
+  <p>See role coverage, attendance, and GPS-detected arrival status in one place.</p>
+</section>
+
+<section class="dashboard-grid">
+  <article class="card">
+    <p class="section-label">Attendance snapshot</p>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span>Total joined</span>
+        <strong>{{ activity.joined }}/{{ activity.capacity }}</strong>
+      </div>
+      <div class="stat-card">
+        <span>Interested</span>
+        <strong>{{ activity.interested }}</strong>
+      </div>
+      <div class="stat-card">
+        <span>Waitlist</span>
+        <strong>{{ activity.waitlist_count }}</strong>
+      </div>
+      <div class="stat-card">
+        <span>Arriving soon</span>
+        <strong>{{ activity.eta_summary.arriving_soon }}</strong>
+      </div>
+    </div>
+  </article>
+
+  <article class="card">
+    <p class="section-label">Role fulfillment</p>
+    <div class="role-column">
+      {% for role in activity.roles %}
+      <div class="role-card">
+        <div>
+          <h3>{{ role.name }}</h3>
+          <p>{{ role.type|capitalize }}</p>
+        </div>
+        <strong>{{ role.filled }}/{{ role.needed }}</strong>
+      </div>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="detail-grid">
+  <article class="card">
+    <div class="section-header">
+      <div>
+        <p class="section-label">Interested</p>
+        <h2>Not committed yet</h2>
+      </div>
+    </div>
+    <div class="role-column">
+      {% for person in activity.interested_users %}
+      <form class="role-card manage-card" method="post" action="{{ url_for('update_participant', activity_id=activity.id, participation_id=person.id) }}">
+        <div>
+          <strong>{{ person.name }}</strong>
+          <p>Interested only • Reliability {{ person.reliability }}</p>
+        </div>
+        <div class="manage-controls">
+          <label class="compact-field">
+            Status
+            <select name="status">
+              <option value="interested" selected>Interested</option>
+              <option value="joined">Joined</option>
+              <option value="waitlist">Waitlist</option>
+              <option value="remove">Remove</option>
+            </select>
+          </label>
+          <label class="compact-field">
+            Role
+            <select name="assigned_role_id">
+              <option value="">Guest</option>
+              {% for role in activity.roles %}
+              <option value="{{ role.id }}" {% if role.id == person.assigned_role_id %}selected{% endif %}>{{ role.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button class="secondary-button" type="submit">Save</button>
+        </div>
+      </form>
+      {% else %}
+      <div class="role-card">
+        <div>
+          <h3>No interested users</h3>
+          <p>People who follow the plan without joining will appear here.</p>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="card">
+    <div class="section-header">
+      <div>
+        <p class="section-label">Waitlist</p>
+        <h2>Pending join access</h2>
+      </div>
+    </div>
+    <div class="role-column">
+      {% for person in activity.waitlist %}
+      <form class="role-card manage-card" method="post" action="{{ url_for('update_participant', activity_id=activity.id, participation_id=person.id) }}">
+        <div>
+          <strong>{{ person.name }}</strong>
+          <p>{{ person.reason }} • Reliability {{ person.reliability }}</p>
+        </div>
+        <div class="manage-controls">
+          <label class="compact-field">
+            Status
+            <select name="status">
+              <option value="waitlist" selected>Waitlist</option>
+              <option value="joined">Joined</option>
+              <option value="interested">Interested</option>
+              <option value="remove">Remove</option>
+            </select>
+          </label>
+          <label class="compact-field">
+            Role
+            <select name="assigned_role_id">
+              <option value="">Guest</option>
+              {% for role in activity.roles %}
+              <option value="{{ role.id }}" {% if role.id == person.assigned_role_id %}selected{% endif %}>{{ role.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <button class="secondary-button" type="submit">Save</button>
+        </div>
+      </form>
+      {% else %}
+      <div class="role-card">
+        <div>
+          <h3>No waitlist right now</h3>
+          <p>Everyone eligible can join directly.</p>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="card">
+  <div class="section-header">
+    <div>
+      <p class="section-label">Attendee management</p>
+      <h2>Roles and ETA</h2>
+    </div>
+    <a class="text-link" href="{{ url_for('activity_detail', activity_id=activity.id) }}">Back to activity</a>
+  </div>
+  <div class="role-column">
+    {% for attendee in activity.attendees %}
+    <form class="role-card manage-card" method="post" action="{{ url_for('update_participant', activity_id=activity.id, participation_id=attendee.id) }}">
+      <div>
+        <strong>{{ attendee.name }}</strong>
+        <p>{{ attendee.role }} • Reliability {{ attendee.reliability }} • {{ attendee.eta }}</p>
+      </div>
+      <div class="manage-controls">
+        <label class="compact-field">
+          Status
+          <select name="status">
+            <option value="joined" selected>Joined</option>
+            {% if not loop.first %}
+            <option value="interested">Interested</option>
+            <option value="waitlist">Waitlist</option>
+            <option value="remove">Remove</option>
+            {% endif %}
+          </select>
+        </label>
+        <label class="compact-field">
+          Role
+          <select name="assigned_role_id">
+            <option value="">Guest</option>
+            {% for role in activity.roles %}
+            <option value="{{ role.id }}" {% if role.id == attendee.assigned_role_id %}selected{% endif %}>{{ role.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button class="secondary-button" type="submit">Save</button>
+      </div>
+    </form>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

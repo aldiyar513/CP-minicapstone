@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block title %}EventMatch | Profile{% endblock %}
+
+{% block content %}
+<section class="profile-grid">
+  <article class="card profile-main">
+    <p class="eyebrow">Profile</p>
+    <h1>{{ current_user.name }}</h1>
+    <p class="hero-copy">{{ current_user.bio }}</p>
+    <div class="profile-meta">
+      <span class="pill">{{ current_user.city }}</span>
+      <span class="pill">{{ current_user.home_area }}</span>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span>Activities joined</span>
+        <strong>{{ current_user.stats.joined }}</strong>
+      </div>
+      <div class="stat-card">
+        <span>Activities hosted</span>
+        <strong>{{ current_user.stats.hosted }}</strong>
+      </div>
+      <div class="stat-card">
+        <span>Reliability score</span>
+        <strong>{{ current_user.stats.reliability }}</strong>
+      </div>
+    </div>
+  </article>
+
+  <article class="card">
+    <p class="section-label">Interests</p>
+    <div class="role-stack">
+      {% for interest in current_user.interests %}
+      <span class="role-pill preferred">{{ interest }}</span>
+      {% endfor %}
+    </div>
+    <div class="tracking-note spacious-note">
+      <strong>Location tracking preference</strong>
+      <p>{{ current_user.gps_tracking }}</p>
+    </div>
+  </article>
+</section>
+
+<section class="detail-grid">
+  <article class="card">
+    <div class="section-header">
+      <div>
+        <p class="section-label">Upcoming plans</p>
+        <h2>Joined activities</h2>
+      </div>
+    </div>
+    <div class="role-column">
+      {% for activity in upcoming %}
+      <a class="role-card list-card-link" href="{{ url_for('activity_detail', activity_id=activity.id) }}">
+        <div>
+          <h3>{{ activity.title }}</h3>
+          <p>{{ activity.date }} • {{ activity.time }}</p>
+        </div>
+        <strong>{{ activity.category }}</strong>
+      </a>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="card">
+    <div class="section-header">
+      <div>
+        <p class="section-label">Hosted by you</p>
+        <h2>Recent hosting</h2>
+      </div>
+    </div>
+    <div class="role-column">
+      {% for activity in hosted %}
+      <a class="role-card list-card-link" href="{{ url_for('host_dashboard', activity_id=activity.id) }}">
+        <div>
+          <h3>{{ activity.title }}</h3>
+          <p>{{ activity.status }}</p>
+        </div>
+        <strong>{{ activity.joined }}/{{ activity.capacity }}</strong>
+      </a>
+      {% else %}
+      <div class="role-card">
+        <div>
+          <h3>No hosted activities yet</h3>
+          <p>Create your first plan from the feed.</p>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+{% endblock %}

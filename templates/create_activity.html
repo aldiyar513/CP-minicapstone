@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}EventMatch | Create Activity{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">New activity</p>
+  <h1>Create an EventMatch post</h1>
+  <p>Define the plan, protect mandatory roles, and let the app track ETA from attendee location once they join.</p>
+</section>
+
+<section class="card form-card">
+  <form class="activity-form" method="post">
+    <div class="form-grid">
+      <label>
+        Activity title
+        <input type="text" name="title" placeholder="Saturday board game night" value="{{ form_data.title }}" required>
+      </label>
+      <label>
+        Category
+        <select name="category" required>
+          {% for category in categories %}
+          <option {% if category == form_data.category %}selected{% endif %}>{{ category }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Date
+        <input type="date" name="date" value="{{ form_data.date }}" required>
+      </label>
+      <label>
+        Time
+        <input type="time" name="time" value="{{ form_data.time }}" required>
+      </label>
+      <label class="full-span">
+        Location
+        <input type="text" name="location" placeholder="Dorm common room, library, campus gym" value="{{ form_data.location }}" required>
+      </label>
+      <label class="full-span">
+        Description
+        <textarea name="description" rows="4" placeholder="What is the plan, what should people bring, and what should they expect?" required>{{ form_data.description }}</textarea>
+      </label>
+      <label>
+        Capacity
+        <input type="number" name="capacity" min="2" value="{{ form_data.capacity }}" required>
+      </label>
+      <label>
+        ETA mode
+        <input type="text" value="GPS ETA auto-detected after location permission" readonly>
+      </label>
+      <label class="full-span">
+        Minimum attendee reliability
+        <select name="min_reliability" required>
+          {% for threshold in reliability_thresholds %}
+          <option value="{{ threshold.value }}" {% if threshold.value == form_data.min_reliability %}selected{% endif %}>{{ threshold.label }} - {{ threshold.description }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+
+    <div class="role-builder" data-dynamic-roles>
+      <div class="section-header">
+        <div>
+          <p class="section-label">Role setup</p>
+          <h2>Hosts can define mandatory, preferred, or optional roles</h2>
+        </div>
+        <button class="secondary-button" type="button" data-add-role>Add role</button>
+      </div>
+
+      <div class="role-column" data-role-rows>
+        {% for role in form_data.roles %}
+        <div class="role-row" data-role-row>
+          <input type="text" name="role_name" placeholder="Role name" value="{{ role.name }}">
+          <select name="role_type">
+            <option {% if role.type == "Mandatory" %}selected{% endif %}>Mandatory</option>
+            <option {% if role.type == "Preferred" %}selected{% endif %}>Preferred</option>
+            <option {% if role.type == "Optional" %}selected{% endif %}>Optional</option>
+          </select>
+          <input type="number" name="role_needed" min="1" value="{{ role.needed }}" aria-label="needed count">
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="primary-button" type="submit">Create activity</button>
+      <a class="text-link" href="{{ url_for('feed') }}">Back to feed</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

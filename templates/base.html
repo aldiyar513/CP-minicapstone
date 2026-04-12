@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}EventMatch{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="backdrop-grid"></div>
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="brand-cluster">
+          <div class="brand-row">
+            <span class="brand-mark"></span>
+            <a class="brand" href="{{ url_for('feed') }}">EventMatch</a>
+          </div>
+          <span class="topbar-tag">Campus plans, live role coverage, GPS ETA</span>
+        </div>
+        <nav class="nav-links">
+          <a href="{{ url_for('feed') }}">Feed</a>
+          <a href="{{ url_for('create_activity') }}">Create Activity</a>
+          <a href="{{ url_for('profile') }}">Profile</a>
+        </nav>
+      </header>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <section class="flash-stack">
+        {% for category, message in messages %}
+        <article class="flash-message flash-{{ category }}">{{ message }}</article>
+        {% endfor %}
+      </section>
+      {% endif %}
+      {% endwith %}
+      <main>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

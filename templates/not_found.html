@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block title %}EventMatch | Not Found{% endblock %}
+
+{% block content %}
+<section class="card empty-state">
+  <h1>Activity not found</h1>
+  <p>The selected activity does not exist anymore, or the URL is invalid.</p>
+  <a class="primary-button" href="{{ url_for('feed') }}">Return to feed</a>
+</section>
+{% endblock %}
