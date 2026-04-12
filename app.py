@@ -175,6 +175,10 @@ def create_app(test_config: dict | None = None) -> Flask:
 
 
 def register_routes(app: Flask) -> None:
+    @app.get("/healthz")
+    def healthcheck():
+        return {"ok": True}, 200
+
     @app.route("/")
     def feed():
         current_user = get_current_user()
