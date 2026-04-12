@@ -44,7 +44,9 @@ def get_database_uri() -> str:
     database_url = os.getenv("DATABASE_URL", "").strip()
     if database_url:
         if database_url.startswith("postgres://"):
-            return database_url.replace("postgres://", "postgresql://", 1)
+            database_url = database_url.replace("postgres://", "postgresql+psycopg://", 1)
+        elif database_url.startswith("postgresql://"):
+            database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
         return database_url
     return f"sqlite:///{DEFAULT_DB_PATH}"
 
