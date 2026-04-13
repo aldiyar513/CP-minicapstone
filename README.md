@@ -27,6 +27,8 @@ python3 app.py
 
 The app seeds a local SQLite database automatically in `instance/eventmatch.db` the first time it starts.
 
+The venue map uses Leaflet with OpenStreetMap tiles. No Google Maps key or billing setup is required.
+
 ## Deploy to Google Cloud Run
 
 The app now supports production-style environment configuration:
@@ -34,7 +36,6 @@ The app now supports production-style environment configuration:
 - `PORT` sets the listening port.
 - `HOST` sets the bind address for the Flask dev server.
 - `SECRET_KEY` overrides the default development secret.
-- `GOOGLE_MAPS_API_KEY` enables Google Maps place pinning, map previews, and route-based ETA from a participant's current location.
 - `DATABASE_URL` overrides the default SQLite database.
 - `INSTANCE_CONNECTION_NAME`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` can be used for Google Cloud SQL over the `/cloudsql/...` Unix socket when `DATABASE_URL` is not set.
 
@@ -55,7 +56,7 @@ This repository now includes:
 
 For production on Cloud Run, do not rely on local SQLite. Use `DATABASE_URL` or a Cloud SQL PostgreSQL connection.
 
-If you want the map picker and Google-route ETA locally, export `GOOGLE_MAPS_API_KEY` before starting the app.
+Venue pinning works without any extra API key. Hosts can search once against OpenStreetMap or click directly on the map to place the event pin. Participant ETA remains an approximate distance-based estimate.
 
 ## Current backend features
 

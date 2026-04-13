@@ -189,7 +189,6 @@ def create_app(test_config: dict | None = None) -> Flask:
         SECRET_KEY=os.getenv("SECRET_KEY", "dev-secret-key"),
         SQLALCHEMY_DATABASE_URI=get_database_uri(),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
-        GOOGLE_MAPS_API_KEY=os.getenv("GOOGLE_MAPS_API_KEY", "").strip(),
     )
     if test_config:
         app.config.update(test_config)
@@ -230,7 +229,6 @@ def register_routes(app: Flask) -> None:
         return {
             "viewer": serialize_user(current_user) if current_user else None,
             "interest_options": INTEREST_OPTIONS,
-            "google_maps_api_key": app.config.get("GOOGLE_MAPS_API_KEY", ""),
         }
 
     @app.get("/healthz")
@@ -1203,8 +1201,7 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
         "weekday": activity.activity_date.strftime("%a"),
         "time": display_time(activity.start_time),
         "location": activity.location,
-        "maps_query_url": google_maps_search_url(activity.location),
-        "maps_directions_url": google_maps_directions_url(activity.venue_lat, activity.venue_lng),
+        "map_url": openstreetmap_search_url(activity.location),
         "host": activity.host.name,
         "description": activity.description,
         "summary": truncate(activity.description, 140),
@@ -1279,7 +1276,7 @@ def serialize_activity_summary(activity: Activity) -> dict:
         "time": display_time(activity.start_time),
         "category": activity.category,
         "location": activity.location,
-        "maps_query_url": google_maps_search_url(activity.location),
+        "map_url": openstreetmap_search_url(activity.location),
         "status": activity_status(activity, serialized_roles),
         "joined": count_joined(activity),
         "capacity": activity.capacity,
@@ -1338,12 +1335,8 @@ def display_time(value: time) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
 
 
-def google_maps_search_url(query: str) -> str:
-    return f"https://www.google.com/maps/search/?api=1&query={quote_plus(query)}"
-
-
-def google_maps_directions_url(lat: float, lng: float) -> str:
-    return f"https://www.google.com/maps/dir/?api=1&destination={lat},{lng}"
+def openstreetmap_search_url(query: str) -> str:
+    return f"https://www.openstreetmap.org/search?query={quote_plus(query)}"
 
 
 def display_chat_time(value: datetime) -> str:

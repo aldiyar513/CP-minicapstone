@@ -28,7 +28,7 @@
     <h1>{{ activity.title }}</h1>
     <p class="lead">{{ activity.location }} • hosted by {{ activity.host }}</p>
     <p class="support-copy">
-      <a class="text-link" href="{{ activity.maps_query_url }}" target="_blank" rel="noreferrer">Open pinned location in Google Maps</a>
+      <a class="text-link" href="{{ activity.map_url }}" target="_blank" rel="noreferrer">Open pinned location in OpenStreetMap</a>
     </p>
     <p class="support-copy">{{ activity.description }}</p>
   </div>
@@ -70,9 +70,8 @@
       <div class="gps-status">
         <span class="eta-chip gps-chip">{{ activity.viewer_eta }}</span>
         <button class="secondary-button gps-button" type="button">Share ETA</button>
-        <a class="secondary-button" href="{{ activity.maps_directions_url }}" target="_blank" rel="noreferrer">Directions</a>
       </div>
-      <small class="support-copy">{{ activity.tracking_mode }}</small>
+      <small class="support-copy">{{ activity.tracking_mode }} ETA is estimated from straight-line distance to the pinned venue.</small>
     </div>
   </article>
 
@@ -80,9 +79,9 @@
     <div class="section-header">
       <div>
         <p class="section-label">Location</p>
-        <h2>Google Maps pin</h2>
+        <h2>Venue pin</h2>
       </div>
-      <a class="text-link" href="{{ activity.maps_query_url }}" target="_blank" rel="noreferrer">Open in Maps</a>
+      <a class="text-link" href="{{ activity.map_url }}" target="_blank" rel="noreferrer">Open in OpenStreetMap</a>
     </div>
     <div
       class="map-canvas"
@@ -92,7 +91,7 @@
       data-title="{{ activity.title }}"
       data-location="{{ activity.location }}"
     ></div>
-    <p class="compact-copy">Participants can share route-based ETA from their current location to this pinned place when Google Maps is configured.</p>
+    <p class="compact-copy">Participants can share an ETA estimate based on their current distance to this pinned place without any paid map service.</p>
   </article>
 </section>
 

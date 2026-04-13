@@ -781,6 +781,13 @@ textarea:focus {
   justify-content: space-between;
 }
 
+.map-inline-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
 .delete-form-inline {
   margin-top: 0.9rem;
 }

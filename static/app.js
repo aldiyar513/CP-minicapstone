@@ -36,20 +36,8 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return earthRadiusKm * c;
 }
 
-function googleMapsAvailable() {
-  return Boolean(window.google && window.google.maps);
-}
-
-function buildInfoWindowContent(title, location) {
-  const wrapper = document.createElement("div");
-  const heading = document.createElement("strong");
-  heading.textContent = title;
-  wrapper.appendChild(heading);
-  if (location) {
-    wrapper.appendChild(document.createElement("br"));
-    wrapper.appendChild(document.createTextNode(location));
-  }
-  return wrapper;
+function leafletAvailable() {
+  return Boolean(window.L);
 }
 
 function setMapPlaceholder(node, message) {
@@ -68,30 +56,59 @@ function clearMapPlaceholder(node) {
   node.textContent = "";
 }
 
-function routeEtaFromLeg(leg) {
-  const durationSeconds = leg.duration?.value || 0;
-  const durationMinutes = Math.max(1, Math.round(durationSeconds / 60));
-  const distanceMeters = leg.distance?.value || 0;
+function buildPopupContent(title, location) {
+  const wrapper = document.createElement("div");
+  const heading = document.createElement("strong");
+  heading.textContent = title;
+  wrapper.appendChild(heading);
+  if (location) {
+    wrapper.appendChild(document.createElement("br"));
+    wrapper.appendChild(document.createTextNode(location));
+  }
+  return wrapper;
+}
 
-  let status = "delayed";
-  let prefix = "Delayed";
-  if (distanceMeters < 200 || durationMinutes <= 2) {
-    status = "checked_in";
-    prefix = "At venue";
-  } else if (durationMinutes <= 8) {
-    status = "arriving_soon";
-    prefix = "Arriving soon";
-  } else if (durationMinutes <= 20) {
-    status = "on_track";
-    prefix = "On track";
+function ensureLeafletMap(node, center, zoom = 14) {
+  if (!leafletAvailable()) {
+    setMapPlaceholder(node, "Map library unavailable.");
+    return null;
   }
 
-  const durationText = leg.duration?.text || `${durationMinutes} min`;
-  const distanceText = leg.distance?.text ? ` • ${leg.distance.text}` : "";
-  return {
-    status,
-    text: `${prefix} • ${durationText} away${distanceText}`,
-  };
+  clearMapPlaceholder(node);
+  if (!node._leafletMap) {
+    node._leafletMap = L.map(node, {
+      scrollWheelZoom: false,
+    }).setView([center.lat, center.lng], zoom);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+    }).addTo(node._leafletMap);
+  } else {
+    node._leafletMap.setView([center.lat, center.lng], zoom);
+  }
+
+  setTimeout(() => {
+    node._leafletMap.invalidateSize();
+  }, 0);
+
+  return node._leafletMap;
+}
+
+function setLeafletMarker(node, center, title = "", location = "") {
+  if (!node._leafletMap) {
+    return;
+  }
+
+  if (!node._leafletMarker) {
+    node._leafletMarker = L.marker([center.lat, center.lng]).addTo(node._leafletMap);
+  } else {
+    node._leafletMarker.setLatLng([center.lat, center.lng]);
+  }
+
+  if (title || location) {
+    node._leafletMarker.bindPopup(buildPopupContent(title || "Pinned venue", location));
+  }
 }
 
 function persistEta(activityId, eta, chip) {
@@ -125,41 +142,6 @@ function requestCurrentPosition() {
   });
 }
 
-async function computeGoogleRouteEta(origin, destination) {
-  const result = await new Promise((resolve, reject) => {
-    const directionsService = new google.maps.DirectionsService();
-    directionsService.route(
-      {
-        origin,
-        destination,
-        travelMode: google.maps.TravelMode.DRIVING,
-      },
-      (response, status) => {
-        if (status !== "OK" || !response) {
-          reject(new Error("Google Maps could not calculate a route"));
-          return;
-        }
-        resolve(response);
-      },
-    );
-  });
-  const leg = result.routes?.[0]?.legs?.[0];
-  if (!leg) {
-    throw new Error("Unable to calculate a route");
-  }
-  return routeEtaFromLeg(leg);
-}
-
-async function computeFallbackEta(origin, destination) {
-  const distanceKm = haversineKm(
-    origin.lat,
-    origin.lng,
-    destination.lat,
-    destination.lng,
-  );
-  return formatEtaMessage(distanceKm);
-}
-
 function initializeGpsPanels() {
   document.querySelectorAll(".gps-panel").forEach((panel) => {
     if (panel.dataset.bound === "true") {
@@ -178,18 +160,17 @@ function initializeGpsPanels() {
     }
 
     button.addEventListener("click", async () => {
-      chip.textContent = googleMapsAvailable() ? "Checking route with Google Maps..." : "Checking location...";
+      chip.textContent = "Checking location...";
 
       try {
         const position = await requestCurrentPosition();
-        const origin = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-        };
-        const destination = { lat: venueLat, lng: venueLng };
-        const eta = googleMapsAvailable()
-          ? await computeGoogleRouteEta(origin, destination)
-          : await computeFallbackEta(origin, destination);
+        const distanceKm = haversineKm(
+          position.coords.latitude,
+          position.coords.longitude,
+          venueLat,
+          venueLng,
+        );
+        const eta = formatEtaMessage(distanceKm);
         chip.textContent = eta.text;
         await persistEta(activityId, eta, chip);
       } catch (error) {
@@ -199,151 +180,152 @@ function initializeGpsPanels() {
   });
 }
 
-function ensureMapInstance(node, center, title, location) {
-  if (!googleMapsAvailable()) {
-    setMapPlaceholder(node, "Add GOOGLE_MAPS_API_KEY to show the pinned venue map.");
-    return null;
-  }
-
-  clearMapPlaceholder(node);
-  if (!node._map) {
-    node._map = new google.maps.Map(node, {
-      center,
-      zoom: 14,
-      mapTypeControl: false,
-      streetViewControl: false,
-      fullscreenControl: false,
-    });
-    node._marker = new google.maps.Marker({
-      map: node._map,
-      position: center,
-      title,
-    });
-    node._infoWindow = new google.maps.InfoWindow({
-      content: buildInfoWindowContent(title, location),
-    });
-    node._marker.addListener("click", () => {
-      node._infoWindow.open(node._map, node._marker);
-    });
-  } else {
-    node._map.setCenter(center);
-    node._marker.setPosition(center);
-    node._marker.setTitle(title);
-    node._infoWindow.setContent(buildInfoWindowContent(title, location));
-  }
-  return node._map;
-}
-
 function initializeStaticMapCanvases() {
   document.querySelectorAll("[data-map-canvas]").forEach((node) => {
     const lat = Number(node.dataset.lat);
     const lng = Number(node.dataset.lng);
+    const title = node.dataset.title || "Pinned venue";
+    const location = node.dataset.location || "";
+
     if (Number.isNaN(lat) || Number.isNaN(lng)) {
       setMapPlaceholder(node, "No location pin available for this event yet.");
       return;
     }
 
-    ensureMapInstance(
-      node,
-      { lat, lng },
-      node.dataset.title || "Pinned venue",
-      node.dataset.location || "",
-    );
+    const map = ensureLeafletMap(node, { lat, lng });
+    if (!map) {
+      return;
+    }
+    setLeafletMarker(node, { lat, lng }, title, location);
   });
 }
 
-function geocodeAddress(address) {
-  return new Promise((resolve, reject) => {
-    const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({ address }, (results, status) => {
-      if (status !== "OK" || !results?.[0]?.geometry?.location) {
-        reject(new Error("Google Maps could not pin that location"));
-        return;
-      }
-      resolve(results[0]);
-    });
-  });
-}
-
-function updateLocationPickerMap(picker, lat, lng, title, location) {
-  const mapNode = picker.querySelector("[data-location-map]");
+function updatePinnedLocation(picker, lat, lng, label) {
   const form = picker.closest("form");
+  const mapNode = picker.querySelector("[data-location-map]");
   const latInput = form?.querySelector("[data-location-lat]");
   const lngInput = form?.querySelector("[data-location-lng]");
+  const input = form?.querySelector("[data-location-input]");
+  const feedback = picker.querySelector("[data-location-feedback]");
+
   if (!mapNode || !latInput || !lngInput) {
     return;
   }
 
   latInput.value = String(lat);
   lngInput.value = String(lng);
-  ensureMapInstance(mapNode, { lat, lng }, title, location);
+  if (feedback) {
+    feedback.textContent = `Pinned coordinates: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  }
+
+  const map = ensureLeafletMap(mapNode, { lat, lng });
+  if (!map) {
+    return;
+  }
+
+  const popupText = label || input?.value || "Pinned venue";
+  setLeafletMarker(mapNode, { lat, lng }, "Pinned venue", popupText);
+}
+
+async function searchLocationOnce(query) {
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("limit", "1");
+  url.searchParams.set("q", query);
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error("Search service unavailable");
+  }
+
+  const results = await response.json();
+  if (!Array.isArray(results) || results.length === 0) {
+    throw new Error("No map result found for that location");
+  }
+  return results[0];
 }
 
 function initializeLocationPickers() {
   document.querySelectorAll("[data-location-picker]").forEach((picker) => {
-    const form = picker.closest("form");
-    const input = form?.querySelector("[data-location-input]");
-    const latInput = form?.querySelector("[data-location-lat]");
-    const lngInput = form?.querySelector("[data-location-lng]");
-    const mapNode = picker.querySelector("[data-location-map]");
-
-    if (!input || !latInput || !lngInput || !mapNode) {
-      return;
-    }
-
-    const currentLat = Number(latInput.value || picker.dataset.defaultLat);
-    const currentLng = Number(lngInput.value || picker.dataset.defaultLng);
-    if (!Number.isNaN(currentLat) && !Number.isNaN(currentLng)) {
-      if (googleMapsAvailable()) {
-        ensureMapInstance(mapNode, { lat: currentLat, lng: currentLng }, "Pinned venue", input.value || "Event location");
-      } else {
-        setMapPlaceholder(mapNode, "Add GOOGLE_MAPS_API_KEY to pin this venue on a map.");
-      }
-    }
-
-    if (googleMapsAvailable() && !picker._autocomplete) {
-      picker._autocomplete = new google.maps.places.Autocomplete(input, {
-        fields: ["formatted_address", "geometry", "name"],
-      });
-      picker._autocomplete.addListener("place_changed", () => {
-        const place = picker._autocomplete.getPlace();
-        if (!place.geometry?.location) {
-          return;
-        }
-        input.value = place.formatted_address || place.name || input.value;
-        updateLocationPickerMap(
-          picker,
-          place.geometry.location.lat(),
-          place.geometry.location.lng(),
-          place.name || input.value,
-          place.formatted_address || input.value,
-        );
-      });
-    }
-
     if (picker.dataset.bound === "true") {
       return;
     }
     picker.dataset.bound = "true";
 
-    input.addEventListener("blur", async () => {
-      if (!googleMapsAvailable() || !input.value.trim()) {
-        return;
-      }
-      try {
-        const result = await geocodeAddress(input.value.trim());
-        const point = result.geometry.location;
-        updateLocationPickerMap(
+    const form = picker.closest("form");
+    const input = form?.querySelector("[data-location-input]");
+    const latInput = form?.querySelector("[data-location-lat]");
+    const lngInput = form?.querySelector("[data-location-lng]");
+    const searchButton = picker.querySelector("[data-location-search]");
+    const mapNode = picker.querySelector("[data-location-map]");
+    const feedback = picker.querySelector("[data-location-feedback]");
+
+    if (!form || !input || !latInput || !lngInput || !mapNode) {
+      return;
+    }
+
+    const initialLat = Number(latInput.value || picker.dataset.defaultLat);
+    const initialLng = Number(lngInput.value || picker.dataset.defaultLng);
+    if (!Number.isNaN(initialLat) && !Number.isNaN(initialLng)) {
+      updatePinnedLocation(picker, initialLat, initialLng, input.value || "Pinned venue");
+    } else {
+      setMapPlaceholder(mapNode, "Map unavailable for this venue.");
+    }
+
+    if (mapNode._leafletMap) {
+      mapNode._leafletMap.on("click", (event) => {
+        updatePinnedLocation(
           picker,
-          point.lat(),
-          point.lng(),
-          result.formatted_address,
-          result.formatted_address,
+          event.latlng.lat,
+          event.latlng.lng,
+          input.value || "Pinned venue",
         );
-      } catch (_error) {
-        setMapPlaceholder(mapNode, "Google Maps could not pin that location yet.");
-      }
-    });
+      });
+    }
+
+    if (searchButton) {
+      searchButton.addEventListener("click", async () => {
+        const query = input.value.trim();
+        if (!query) {
+          if (feedback) {
+            feedback.textContent = "Type a location first, then search once.";
+          }
+          return;
+        }
+
+        searchButton.disabled = true;
+        searchButton.textContent = "Searching...";
+        if (feedback) {
+          feedback.textContent = "Searching OpenStreetMap...";
+        }
+        try {
+          const result = await searchLocationOnce(query);
+          const lat = Number(result.lat);
+          const lng = Number(result.lon);
+          if (Number.isNaN(lat) || Number.isNaN(lng)) {
+            throw new Error("Search result is missing coordinates");
+          }
+          input.value = result.display_name || input.value;
+          updatePinnedLocation(
+            picker,
+            lat,
+            lng,
+            result.display_name || input.value,
+          );
+        } catch (error) {
+          if (feedback) {
+            feedback.textContent = error.message || "Unable to find that location";
+          }
+        } finally {
+          searchButton.disabled = false;
+          searchButton.textContent = "Find on map";
+        }
+      });
+    }
   });
 }
 
@@ -381,9 +363,5 @@ function initializeApp() {
   initializeLocationPickers();
   initializeDynamicRoles();
 }
-
-window.initGoogleMaps = function initGoogleMaps() {
-  initializeApp();
-};
 
 initializeApp();
