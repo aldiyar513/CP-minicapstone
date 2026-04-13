@@ -259,3 +259,52 @@ def test_host_can_confirm_waitlisted_user(client):
     with app.app_context():
         updated = db.session.get(Participation, participant_id)
         assert updated.status == "joined"
+
+
+def test_host_can_edit_and_delete_activity(client):
+    test_client, app = client
+    login(test_client, email="maya@example.com")
+
+    with app.app_context():
+        activity = Activity.query.filter_by(title="Calculus Sprint").first()
+        activity_id = activity.id
+
+    edit_response = test_client.post(
+        f"/activities/{activity_id}/edit",
+        data={
+            "title": "Calculus Sprint Extended",
+            "category": "Study",
+            "date": date.today().isoformat(),
+            "time": "19:00",
+            "location": "Engineering Library",
+            "venue_lat": "-34.6034",
+            "venue_lng": "-58.3821",
+            "description": "Longer review session with exact venue pin.",
+            "capacity": "8",
+            "min_reliability": "80",
+            "role_name": ["Problem Solver"],
+            "role_type": ["Mandatory"],
+            "role_needed": ["2"],
+        },
+        follow_redirects=True,
+    )
+
+    assert edit_response.status_code == 200
+    assert b"Event updated." in edit_response.data
+
+    with app.app_context():
+        updated = db.session.get(Activity, activity_id)
+        assert updated.title == "Calculus Sprint Extended"
+        assert updated.location == "Engineering Library"
+        assert updated.capacity == 8
+        assert updated.venue_lat == pytest.approx(-34.6034)
+        assert updated.venue_lng == pytest.approx(-58.3821)
+        assert [role.name for role in updated.roles] == ["Problem Solver"]
+
+    delete_response = test_client.post(f"/activities/{activity_id}/delete", follow_redirects=True)
+    assert delete_response.status_code == 200
+    assert b"Event deleted." in delete_response.data
+    assert b"Event list" in delete_response.data
+
+    with app.app_context():
+        assert db.session.get(Activity, activity_id) is None

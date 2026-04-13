@@ -189,6 +189,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         SECRET_KEY=os.getenv("SECRET_KEY", "dev-secret-key"),
         SQLALCHEMY_DATABASE_URI=get_database_uri(),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        GOOGLE_MAPS_API_KEY=os.getenv("GOOGLE_MAPS_API_KEY", "").strip(),
     )
     if test_config:
         app.config.update(test_config)
@@ -229,6 +230,7 @@ def register_routes(app: Flask) -> None:
         return {
             "viewer": serialize_user(current_user) if current_user else None,
             "interest_options": INTEREST_OPTIONS,
+            "google_maps_api_key": app.config.get("GOOGLE_MAPS_API_KEY", ""),
         }
 
     @app.get("/healthz")
@@ -345,22 +347,7 @@ def register_routes(app: Flask) -> None:
     @login_required
     def create_activity():
         current_user = require_current_user()
-        default_roles = [
-            {"name": "", "type": "Mandatory", "needed": "1"},
-            {"name": "", "type": "Preferred", "needed": "1"},
-        ]
-        form_data = {
-            "title": "",
-            "category": CATEGORIES[0],
-            "date": date.today().isoformat(),
-            "time": "18:00",
-            "location": "",
-            "description": "",
-            "capacity": "6",
-            "min_reliability": RELIABILITY_THRESHOLDS[1]["value"],
-            "recurring_weekly": False,
-            "roles": default_roles,
-        }
+        form_data = empty_activity_form_defaults()
 
         if request.method == "POST":
             cleaned, errors = validate_activity_form(request.form)
@@ -373,6 +360,7 @@ def register_routes(app: Flask) -> None:
                     categories=CATEGORIES,
                     reliability_thresholds=RELIABILITY_THRESHOLDS,
                     form_data=form_data,
+                    form_mode="create",
                 ), 400
 
             activity = Activity(
@@ -386,22 +374,14 @@ def register_routes(app: Flask) -> None:
                 min_reliability=cleaned["min_reliability_value"],
                 recurring_weekly=cleaned["recurring_weekly"],
                 tracking_mode=DEFAULT_TRACKING_MODE,
-                venue_lat=DEFAULT_VENUE_COORDS["lat"],
-                venue_lng=DEFAULT_VENUE_COORDS["lng"],
+                venue_lat=cleaned["venue_lat"],
+                venue_lng=cleaned["venue_lng"],
                 host=current_user,
             )
             db.session.add(activity)
             db.session.flush()
 
-            for role_data in cleaned["roles_clean"]:
-                db.session.add(
-                    Role(
-                        activity=activity,
-                        name=role_data["name"],
-                        role_type=role_data["type"].lower(),
-                        needed_count=role_data["needed"],
-                    )
-                )
+            replace_activity_roles(activity, cleaned["roles_clean"])
 
             db.session.add(
                 Participation(
@@ -422,7 +402,72 @@ def register_routes(app: Flask) -> None:
             categories=CATEGORIES,
             reliability_thresholds=RELIABILITY_THRESHOLDS,
             form_data=form_data,
+            form_mode="create",
         )
+
+    @app.route("/activities/<int:activity_id>/edit", methods=["GET", "POST"])
+    @login_required
+    def edit_activity(activity_id: int):
+        current_user = require_current_user()
+        activity = get_activity_or_404(activity_id)
+        require_host_access(activity, current_user)
+
+        form_data = activity_form_defaults(activity)
+        if request.method == "POST":
+            cleaned, errors = validate_activity_form(
+                request.form,
+                default_coords={"lat": activity.venue_lat, "lng": activity.venue_lng},
+            )
+            if cleaned.get("capacity_value", activity.capacity) < count_joined(activity):
+                errors.append("Capacity cannot be lower than the number of confirmed attendees.")
+            form_data = cleaned
+            if errors:
+                for error in errors:
+                    flash(error, "error")
+                return render_template(
+                    "create_activity.html",
+                    categories=CATEGORIES,
+                    reliability_thresholds=RELIABILITY_THRESHOLDS,
+                    form_data=form_data,
+                    form_mode="edit",
+                    activity=serialize_activity(activity, current_user),
+                ), 400
+
+            activity.title = cleaned["title"]
+            activity.category = cleaned["category"]
+            activity.activity_date = cleaned["activity_date"]
+            activity.start_time = cleaned["start_time"]
+            activity.location = cleaned["location"]
+            activity.description = cleaned["description"]
+            activity.capacity = cleaned["capacity_value"]
+            activity.min_reliability = cleaned["min_reliability_value"]
+            activity.recurring_weekly = cleaned["recurring_weekly"]
+            activity.venue_lat = cleaned["venue_lat"]
+            activity.venue_lng = cleaned["venue_lng"]
+            replace_activity_roles(activity, cleaned["roles_clean"])
+            db.session.commit()
+            flash("Event updated.", "success")
+            return redirect(url_for("activity_detail", activity_id=activity.id))
+
+        return render_template(
+            "create_activity.html",
+            categories=CATEGORIES,
+            reliability_thresholds=RELIABILITY_THRESHOLDS,
+            form_data=form_data,
+            form_mode="edit",
+            activity=serialize_activity(activity, current_user),
+        )
+
+    @app.post("/activities/<int:activity_id>/delete")
+    @login_required
+    def delete_activity(activity_id: int):
+        current_user = require_current_user()
+        activity = get_activity_or_404(activity_id)
+        require_host_access(activity, current_user)
+        db.session.delete(activity)
+        db.session.commit()
+        flash("Event deleted.", "success")
+        return redirect(url_for("feed"))
 
     @app.route("/activities/<int:activity_id>")
     @login_required
@@ -716,7 +761,51 @@ def validate_registration_form(form_data: dict, password: str) -> list[str]:
     return errors
 
 
-def validate_activity_form(form) -> tuple[dict, list[str]]:
+def empty_activity_form_defaults() -> dict:
+    return {
+        "title": "",
+        "category": CATEGORIES[0],
+        "date": date.today().isoformat(),
+        "time": "18:00",
+        "location": "",
+        "description": "",
+        "capacity": "6",
+        "min_reliability": RELIABILITY_THRESHOLDS[1]["value"],
+        "recurring_weekly": False,
+        "venue_lat": DEFAULT_VENUE_COORDS["lat"],
+        "venue_lng": DEFAULT_VENUE_COORDS["lng"],
+        "roles": [
+            {"name": "", "type": "Mandatory", "needed": "1"},
+            {"name": "", "type": "Preferred", "needed": "1"},
+        ],
+    }
+
+
+def activity_form_defaults(activity: Activity) -> dict:
+    return {
+        "title": activity.title,
+        "category": activity.category,
+        "date": activity.activity_date.isoformat(),
+        "time": activity.start_time.isoformat(timespec="minutes"),
+        "location": activity.location,
+        "description": activity.description,
+        "capacity": str(activity.capacity),
+        "min_reliability": str(activity.min_reliability),
+        "recurring_weekly": activity.recurring_weekly,
+        "venue_lat": activity.venue_lat,
+        "venue_lng": activity.venue_lng,
+        "roles": [
+            {"name": role.name, "type": role.role_type.capitalize(), "needed": str(role.needed_count)}
+            for role in activity.roles
+        ]
+        or [
+            {"name": "", "type": "Mandatory", "needed": "1"},
+            {"name": "", "type": "Preferred", "needed": "1"},
+        ],
+    }
+
+
+def validate_activity_form(form, *, default_coords: dict[str, float] | None = None) -> tuple[dict, list[str]]:
     errors: list[str] = []
     title = form.get("title", "").strip()
     category = form.get("category", "").strip()
@@ -727,6 +816,9 @@ def validate_activity_form(form) -> tuple[dict, list[str]]:
     capacity_raw = form.get("capacity", "").strip()
     min_reliability_raw = form.get("min_reliability", "").strip()
     recurring_weekly = form.get("recurring_weekly") == "on"
+    venue_lat_raw = form.get("venue_lat", "").strip()
+    venue_lng_raw = form.get("venue_lng", "").strip()
+    coords = default_coords or DEFAULT_VENUE_COORDS
 
     cleaned = {
         "title": title,
@@ -738,6 +830,8 @@ def validate_activity_form(form) -> tuple[dict, list[str]]:
         "capacity": capacity_raw,
         "min_reliability": min_reliability_raw,
         "recurring_weekly": recurring_weekly,
+        "venue_lat": coords["lat"],
+        "venue_lng": coords["lng"],
         "roles": [],
     }
 
@@ -778,6 +872,13 @@ def validate_activity_form(form) -> tuple[dict, list[str]]:
     else:
         cleaned["min_reliability_value"] = int(min_reliability_raw)
 
+    if venue_lat_raw and venue_lng_raw:
+        try:
+            cleaned["venue_lat"] = float(venue_lat_raw)
+            cleaned["venue_lng"] = float(venue_lng_raw)
+        except ValueError:
+            errors.append("Pinned map coordinates are invalid. Re-pick the location.")
+
     role_names = form.getlist("role_name")
     role_types = form.getlist("role_type")
     role_needed = form.getlist("role_needed")
@@ -808,6 +909,22 @@ def validate_activity_form(form) -> tuple[dict, list[str]]:
     ]
     cleaned["roles_clean"] = roles_clean
     return cleaned, errors
+
+
+def replace_activity_roles(activity: Activity, roles_clean: list[dict]) -> None:
+    for participation in activity.participations:
+        participation.assigned_role = None
+    activity.roles.clear()
+    db.session.flush()
+    for role_data in roles_clean:
+        db.session.add(
+            Role(
+                activity=activity,
+                name=role_data["name"],
+                role_type=role_data["type"].lower(),
+                needed_count=role_data["needed"],
+            )
+        )
 
 
 def profile_form_defaults(user: User) -> dict:
@@ -1086,6 +1203,8 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
         "weekday": activity.activity_date.strftime("%a"),
         "time": display_time(activity.start_time),
         "location": activity.location,
+        "maps_query_url": google_maps_search_url(activity.location),
+        "maps_directions_url": google_maps_directions_url(activity.venue_lat, activity.venue_lng),
         "host": activity.host.name,
         "description": activity.description,
         "summary": truncate(activity.description, 140),
@@ -1160,6 +1279,7 @@ def serialize_activity_summary(activity: Activity) -> dict:
         "time": display_time(activity.start_time),
         "category": activity.category,
         "location": activity.location,
+        "maps_query_url": google_maps_search_url(activity.location),
         "status": activity_status(activity, serialized_roles),
         "joined": count_joined(activity),
         "capacity": activity.capacity,
@@ -1216,6 +1336,14 @@ def reliability_note(min_reliability: int) -> str:
 
 def display_time(value: time) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
+
+
+def google_maps_search_url(query: str) -> str:
+    return f"https://www.google.com/maps/search/?api=1&query={quote_plus(query)}"
+
+
+def google_maps_directions_url(lat: float, lng: float) -> str:
+    return f"https://www.google.com/maps/dir/?api=1&destination={lat},{lng}"
 
 
 def display_chat_time(value: datetime) -> str:

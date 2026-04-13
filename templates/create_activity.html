@@ -1,18 +1,18 @@
 {% extends "base.html" %}
 
-{% block title %}EventMatch | Create event{% endblock %}
+{% block title %}EventMatch | {% if form_mode == "edit" %}Edit event{% else %}Create event{% endif %}{% endblock %}
 
 {% block content %}
 <section class="page-header">
-  <a class="back-link" href="{{ url_for('feed') }}">← Back to feed</a>
+  <a class="back-link" href="{% if form_mode == 'edit' and activity %}{{ url_for('activity_detail', activity_id=activity.id) }}{% else %}{{ url_for('feed') }}{% endif %}">← Back</a>
 </section>
 
 <section class="card form-card">
   <div class="section-header">
     <div>
-      <p class="section-label">Create event</p>
-      <h1>Publish a real event</h1>
-      <p class="lead">Keep the card compact, but store enough detail for attendees and hosts.</p>
+      <p class="section-label">{% if form_mode == "edit" %}Edit event{% else %}Create event{% endif %}</p>
+      <h1>{% if form_mode == "edit" %}Update this event{% else %}Publish a real event{% endif %}</h1>
+      <p class="lead">Keep the card compact, but store enough detail for attendees, hosts, and map-based ETA.</p>
     </div>
   </div>
   <form class="activity-form" method="post">
@@ -39,8 +39,17 @@
       </label>
       <label class="full-span">
         Location
-        <input type="text" name="location" value="{{ form_data.location }}" required>
+        <input type="text" name="location" value="{{ form_data.location }}" required data-location-input placeholder="Search for a place or full address">
+        <input type="hidden" name="venue_lat" value="{{ form_data.venue_lat }}" data-location-lat>
+        <input type="hidden" name="venue_lng" value="{{ form_data.venue_lng }}" data-location-lng>
       </label>
+      <div class="full-span map-field" data-location-picker data-default-lat="{{ form_data.venue_lat }}" data-default-lng="{{ form_data.venue_lng }}">
+        <div class="map-canvas" data-location-map></div>
+        <div class="map-inline-meta">
+          <p class="compact-copy">Pin the exact venue in Google Maps so attendee ETA is routed to the right place.</p>
+          <a class="text-link" href="https://www.google.com/maps/search/?api=1&query={{ form_data.location|urlencode }}" target="_blank" rel="noreferrer">Open location in Google Maps</a>
+        </div>
+      </div>
       <label class="full-span">
         Description
         <textarea name="description" rows="4" required>{{ form_data.description }}</textarea>
@@ -87,9 +96,14 @@
     </div>
 
     <div class="form-actions">
-      <button class="primary-button" type="submit">Create event</button>
-      <a class="secondary-button" href="{{ url_for('feed') }}">Cancel</a>
+      <button class="primary-button" type="submit">{% if form_mode == "edit" %}Save changes{% else %}Create event{% endif %}</button>
+      <a class="secondary-button" href="{% if form_mode == 'edit' and activity %}{{ url_for('activity_detail', activity_id=activity.id) }}{% else %}{{ url_for('feed') }}{% endif %}">Cancel</a>
     </div>
   </form>
+  {% if form_mode == "edit" and activity %}
+  <form class="delete-form-inline" method="post" action="{{ url_for('delete_activity', activity_id=activity.id) }}" onsubmit="return confirm('Delete this event? This cannot be undone.');">
+    <button class="danger-button" type="submit">Delete event</button>
+  </form>
+  {% endif %}
 </section>
 {% endblock %}
