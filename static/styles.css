@@ -466,6 +466,7 @@ textarea:focus {
 
 .detail-copy {
   max-width: 840px;
+  padding-inline-start: clamp(0.2rem, 1vw, 0.9rem);
 }
 
 .dashboard-hero h1,
@@ -766,6 +767,18 @@ textarea:focus {
   background:
     linear-gradient(135deg, rgba(15, 58, 92, 0.08), rgba(236, 111, 45, 0.08)),
     var(--surface-muted);
+}
+
+.map-canvas.leaflet-container {
+  background: #dce7f2;
+}
+
+.leaflet-container {
+  font: inherit;
+}
+
+.leaflet-container img {
+  max-width: none;
 }
 
 .map-canvas-placeholder {
