@@ -3,9 +3,10 @@
 {% block title %}EventMatch | Access Denied{% endblock %}
 
 {% block content %}
-<section class="card empty-state">
-  <h1>Host access only</h1>
-  <p>This dashboard is only available to the host who created the activity.</p>
-  <a class="primary-button" href="{{ url_for('feed') }}">Return to feed</a>
+<section class="card simple-state">
+  <p class="eyebrow">403</p>
+  <h1>That page is restricted.</h1>
+  <p>You do not have permission to open this area.</p>
+  <a class="text-link" href="{{ url_for('feed' if viewer else 'landing') }}">Go back</a>
 </section>
 {% endblock %}

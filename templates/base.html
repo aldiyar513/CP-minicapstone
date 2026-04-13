@@ -6,26 +6,42 @@
     <title>{% block title %}EventMatch{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700;800&family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   </head>
   <body>
-    <div class="backdrop-grid"></div>
     <div class="page-shell">
       <header class="topbar">
-        <div class="brand-cluster">
-          <div class="brand-row">
-            <span class="brand-mark"></span>
-            <a class="brand" href="{{ url_for('feed') }}">EventMatch</a>
-          </div>
-          <span class="topbar-tag">Campus plans, live role coverage, GPS ETA</span>
-        </div>
+        <a class="brand" href="{{ url_for('feed' if viewer else 'landing') }}">
+          <span class="brand-mark"></span>
+          <span>
+            <strong>EventMatch</strong>
+            <small>Plans that actually happen</small>
+          </span>
+        </a>
         <nav class="nav-links">
+          {% if viewer %}
           <a href="{{ url_for('feed') }}">Feed</a>
-          <a href="{{ url_for('create_activity') }}">Create Activity</a>
+          <a href="{{ url_for('create_activity') }}">Create</a>
           <a href="{{ url_for('profile') }}">Profile</a>
+          <a class="nav-user" href="{{ url_for('profile') }}">
+            {% if viewer.avatar_url %}
+            <img src="{{ viewer.avatar_url }}" alt="{{ viewer.name }}">
+            {% else %}
+            <span>{{ viewer.initials }}</span>
+            {% endif %}
+          </a>
+          <form method="post" action="{{ url_for('logout') }}">
+            <button class="ghost-button" type="submit">Log out</button>
+          </form>
+          {% else %}
+          <a href="{{ url_for('landing') }}">Home</a>
+          <a href="{{ url_for('login') }}">Login</a>
+          <a class="ghost-button" href="{{ url_for('register') }}">Create account</a>
+          {% endif %}
         </nav>
       </header>
+
       {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
       <section class="flash-stack">
@@ -35,6 +51,7 @@
       </section>
       {% endif %}
       {% endwith %}
+
       <main>
         {% block content %}{% endblock %}
       </main>

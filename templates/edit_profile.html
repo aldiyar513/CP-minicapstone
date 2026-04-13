@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}EventMatch | Edit profile{% endblock %}
+
+{% block content %}
+<section class="page-header">
+  <a class="back-link" href="{{ url_for('profile') }}">← Back to profile</a>
+</section>
+
+<section class="card form-card">
+  <div class="section-header">
+    <div>
+      <p class="section-label">Edit profile</p>
+      <h1>Manage your account</h1>
+    </div>
+  </div>
+  <form class="activity-form" method="post">
+    <div class="form-grid">
+      <label>
+        Display name
+        <input type="text" name="name" value="{{ form_data.name }}" required>
+      </label>
+      <label>
+        Email
+        <input type="email" name="email" value="{{ form_data.email }}" required>
+      </label>
+      <label>
+        City
+        <input type="text" name="city" value="{{ form_data.city }}" required>
+      </label>
+      <label>
+        Area / neighborhood
+        <input type="text" name="home_area" value="{{ form_data.home_area }}" required>
+      </label>
+      <label class="full-span">
+        Profile photo URL
+        <input type="url" name="avatar_url" value="{{ form_data.avatar_url }}" placeholder="https://...">
+      </label>
+      <label class="full-span">
+        Bio
+        <textarea name="bio" rows="4" required>{{ form_data.bio }}</textarea>
+      </label>
+      <label class="full-span">
+        ETA privacy
+        <select name="gps_tracking">
+          {% for option in tracking_options %}
+          <option value="{{ option }}" {% if option == form_data.gps_tracking %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+
+    <div class="interest-picker">
+      <p class="section-label">Interests</p>
+      <div class="checkbox-grid">
+        {% for option in interest_options %}
+        <label class="check-pill">
+          <input type="checkbox" name="interests" value="{{ option }}" {% if option in form_data.interests %}checked{% endif %}>
+          <span>{{ option }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <label class="full-span">
+        Add custom interests
+        <input type="text" name="custom_interests" value="{{ form_data.custom_interests }}" placeholder="Padel, film club, startup events">
+      </label>
+    </div>
+
+    <div class="form-actions">
+      <button class="primary-button" type="submit">Save changes</button>
+      <a class="secondary-button" href="{{ url_for('profile') }}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

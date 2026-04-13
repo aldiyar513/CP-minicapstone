@@ -1,26 +1,31 @@
 {% extends "base.html" %}
 
-{% block title %}EventMatch | Create Activity{% endblock %}
+{% block title %}EventMatch | Create event{% endblock %}
 
 {% block content %}
-<section class="page-heading">
-  <p class="eyebrow">New activity</p>
-  <h1>Create an EventMatch post</h1>
-  <p>Define the plan, protect mandatory roles, and let the app track ETA from attendee location once they join.</p>
+<section class="page-header">
+  <a class="back-link" href="{{ url_for('feed') }}">← Back to feed</a>
 </section>
 
 <section class="card form-card">
+  <div class="section-header">
+    <div>
+      <p class="section-label">Create event</p>
+      <h1>Publish a real event</h1>
+      <p class="lead">Keep the card compact, but store enough detail for attendees and hosts.</p>
+    </div>
+  </div>
   <form class="activity-form" method="post">
     <div class="form-grid">
       <label>
-        Activity title
-        <input type="text" name="title" placeholder="Saturday board game night" value="{{ form_data.title }}" required>
+        Event title
+        <input type="text" name="title" value="{{ form_data.title }}" required>
       </label>
       <label>
         Category
         <select name="category" required>
           {% for category in categories %}
-          <option {% if category == form_data.category %}selected{% endif %}>{{ category }}</option>
+          <option value="{{ category }}" {% if category == form_data.category %}selected{% endif %}>{{ category }}</option>
           {% endfor %}
         </select>
       </label>
@@ -34,39 +39,38 @@
       </label>
       <label class="full-span">
         Location
-        <input type="text" name="location" placeholder="Dorm common room, library, campus gym" value="{{ form_data.location }}" required>
+        <input type="text" name="location" value="{{ form_data.location }}" required>
       </label>
       <label class="full-span">
         Description
-        <textarea name="description" rows="4" placeholder="What is the plan, what should people bring, and what should they expect?" required>{{ form_data.description }}</textarea>
+        <textarea name="description" rows="4" required>{{ form_data.description }}</textarea>
       </label>
       <label>
         Capacity
         <input type="number" name="capacity" min="2" value="{{ form_data.capacity }}" required>
       </label>
       <label>
-        ETA mode
-        <input type="text" value="GPS ETA auto-detected after location permission" readonly>
-      </label>
-      <label class="full-span">
-        Minimum attendee reliability
+        Minimum reliability
         <select name="min_reliability" required>
           {% for threshold in reliability_thresholds %}
-          <option value="{{ threshold.value }}" {% if threshold.value == form_data.min_reliability %}selected{% endif %}>{{ threshold.label }} - {{ threshold.description }}</option>
+          <option value="{{ threshold.value }}" {% if threshold.value == form_data.min_reliability %}selected{% endif %}>{{ threshold.label }} — {{ threshold.description }}</option>
           {% endfor %}
         </select>
+      </label>
+      <label class="full-span inline-checkbox">
+        <input type="checkbox" name="recurring_weekly" {% if form_data.recurring_weekly %}checked{% endif %}>
+        <span>Make this a weekly recurring event</span>
       </label>
     </div>
 
     <div class="role-builder" data-dynamic-roles>
       <div class="section-header">
         <div>
-          <p class="section-label">Role setup</p>
-          <h2>Hosts can define mandatory, preferred, or optional roles</h2>
+          <p class="section-label">Roles</p>
+          <h2>Role coverage</h2>
         </div>
         <button class="secondary-button" type="button" data-add-role>Add role</button>
       </div>
-
       <div class="role-column" data-role-rows>
         {% for role in form_data.roles %}
         <div class="role-row" data-role-row>
@@ -83,8 +87,8 @@
     </div>
 
     <div class="form-actions">
-      <button class="primary-button" type="submit">Create activity</button>
-      <a class="text-link" href="{{ url_for('feed') }}">Back to feed</a>
+      <button class="primary-button" type="submit">Create event</button>
+      <a class="secondary-button" href="{{ url_for('feed') }}">Cancel</a>
     </div>
   </form>
 </section>

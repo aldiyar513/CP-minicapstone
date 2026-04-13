@@ -3,9 +3,10 @@
 {% block title %}EventMatch | Not Found{% endblock %}
 
 {% block content %}
-<section class="card empty-state">
-  <h1>Activity not found</h1>
-  <p>The selected activity does not exist anymore, or the URL is invalid.</p>
-  <a class="primary-button" href="{{ url_for('feed') }}">Return to feed</a>
+<section class="card simple-state">
+  <p class="eyebrow">404</p>
+  <h1>We could not find that page.</h1>
+  <p>The link may be outdated, or the event may have been removed.</p>
+  <a class="text-link" href="{{ url_for('feed' if viewer else 'landing') }}">Go back</a>
 </section>
 {% endblock %}

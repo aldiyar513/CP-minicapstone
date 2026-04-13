@@ -3,62 +3,92 @@
 {% block title %}EventMatch | Profile{% endblock %}
 
 {% block content %}
+<section class="page-header">
+  <a class="back-link" href="{{ url_for('feed') }}">← Back to feed</a>
+  <a class="secondary-button" href="{{ url_for('edit_profile') }}">Edit profile</a>
+</section>
+
 <section class="profile-grid">
-  <article class="card profile-main">
-    <p class="eyebrow">Profile</p>
-    <h1>{{ current_user.name }}</h1>
-    <p class="hero-copy">{{ current_user.bio }}</p>
-    <div class="profile-meta">
-      <span class="pill">{{ current_user.city }}</span>
-      <span class="pill">{{ current_user.home_area }}</span>
+  <article class="card profile-card">
+    <div class="profile-top">
+      <div class="avatar avatar-large">
+        {% if current_user.avatar_url %}
+        <img src="{{ current_user.avatar_url }}" alt="{{ current_user.name }}">
+        {% else %}
+        <span>{{ current_user.initials }}</span>
+        {% endif %}
+      </div>
+      <div>
+        <p class="eyebrow">Account</p>
+        <h1>{{ current_user.name }}</h1>
+        <p class="lead">{{ current_user.city }} · {{ current_user.home_area }}</p>
+      </div>
     </div>
+    <p class="support-copy">{{ current_user.bio }}</p>
     <div class="stats-grid">
-      <div class="stat-card">
-        <span>Activities joined</span>
-        <strong>{{ current_user.stats.joined }}</strong>
-      </div>
-      <div class="stat-card">
-        <span>Activities hosted</span>
-        <strong>{{ current_user.stats.hosted }}</strong>
-      </div>
-      <div class="stat-card">
-        <span>Reliability score</span>
-        <strong>{{ current_user.stats.reliability }}</strong>
-      </div>
+      <div class="stat-card"><span>Joined</span><strong>{{ current_user.stats.joined }}</strong></div>
+      <div class="stat-card"><span>Hosted</span><strong>{{ current_user.stats.hosted }}</strong></div>
+      <div class="stat-card"><span>Reliability</span><strong>{{ current_user.stats.reliability }}</strong></div>
+    </div>
+    <div class="tracking-note">
+      <strong>ETA preference</strong>
+      <p>{{ current_user.gps_tracking }}</p>
     </div>
   </article>
 
   <article class="card">
     <p class="section-label">Interests</p>
-    <div class="role-stack">
+    <div class="interest-grid">
       {% for interest in current_user.interests %}
       <span class="role-pill preferred">{{ interest }}</span>
       {% endfor %}
     </div>
     <div class="tracking-note spacious-note">
-      <strong>Location tracking preference</strong>
-      <p>{{ current_user.gps_tracking }}</p>
+      <strong>Profile picture</strong>
+      <p>{% if current_user.avatar_url %}Avatar URL saved and visible in the app.{% else %}Add a profile photo from the edit page.{% endif %}</p>
     </div>
   </article>
 </section>
+
+{% if recurring %}
+<section class="section-block">
+  <div class="section-header">
+    <div>
+      <p class="section-label">Weekly circles</p>
+      <h2>Your recurring groups</h2>
+    </div>
+  </div>
+  <div class="weekly-grid">
+    {% for activity in recurring %}
+    <a class="card weekly-card list-card-link" href="{{ url_for('activity_detail', activity_id=activity.id) }}">
+      <h3>{{ activity.title }}</h3>
+      <p>{{ activity.time }} • {{ activity.location }}</p>
+      <span class="pill pill-strong">{{ activity.category }}</span>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 
 <section class="detail-grid">
   <article class="card">
     <div class="section-header">
       <div>
-        <p class="section-label">Upcoming plans</p>
-        <h2>Joined activities</h2>
+        <p class="section-label">Joined</p>
+        <h2>Upcoming events</h2>
       </div>
     </div>
-    <div class="role-column">
+    <div class="list-stack">
       {% for activity in upcoming %}
-      <a class="role-card list-card-link" href="{{ url_for('activity_detail', activity_id=activity.id) }}">
+      <a class="list-row" href="{{ url_for('activity_detail', activity_id=activity.id) }}">
         <div>
-          <h3>{{ activity.title }}</h3>
-          <p>{{ activity.date }} • {{ activity.time }}</p>
+          <strong>{{ activity.title }}</strong>
+          <p>{{ activity.date_label }} • {{ activity.time }} • {{ activity.location }}</p>
         </div>
-        <strong>{{ activity.category }}</strong>
+        <span class="signal-badge">{{ activity.status }}</span>
       </a>
+      {% else %}
+      <div class="empty-inline">No joined events yet.</div>
       {% endfor %}
     </div>
   </article>
@@ -66,26 +96,21 @@
   <article class="card">
     <div class="section-header">
       <div>
-        <p class="section-label">Hosted by you</p>
-        <h2>Recent hosting</h2>
+        <p class="section-label">Hosted</p>
+        <h2>Your events</h2>
       </div>
     </div>
-    <div class="role-column">
+    <div class="list-stack">
       {% for activity in hosted %}
-      <a class="role-card list-card-link" href="{{ url_for('host_dashboard', activity_id=activity.id) }}">
+      <a class="list-row" href="{{ url_for('host_dashboard', activity_id=activity.id) }}">
         <div>
-          <h3>{{ activity.title }}</h3>
-          <p>{{ activity.status }}</p>
+          <strong>{{ activity.title }}</strong>
+          <p>{{ activity.date_label }} • {{ activity.time }} • {{ activity.joined }}/{{ activity.capacity }} joined</p>
         </div>
-        <strong>{{ activity.joined }}/{{ activity.capacity }}</strong>
+        <span class="signal-badge">{{ activity.status }}</span>
       </a>
       {% else %}
-      <div class="role-card">
-        <div>
-          <h3>No hosted activities yet</h3>
-          <p>Create your first plan from the feed.</p>
-        </div>
-      </div>
+      <div class="empty-inline">No hosted events yet.</div>
       {% endfor %}
     </div>
   </article>

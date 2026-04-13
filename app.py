@@ -1,41 +1,59 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time
+from functools import wraps
 import os
 from pathlib import Path
+from urllib.parse import quote_plus
 
-from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import UniqueConstraint, inspect, text
 from sqlalchemy.orm import joinedload
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = BASE_DIR / "instance" / "eventmatch.db"
-DEFAULT_TRACKING_MODE = "GPS ETA auto-detected while attendees are en route"
-CURRENT_USER_NAME = "Ari Foster"
-CATEGORIES = ["Movie Night", "Gym Session", "Study Session", "Weekend Plan"]
-RELIABILITY_THRESHOLDS = [
-    {
-        "value": "50",
-        "label": "50%+",
-        "description": "Very open, best for casual plans.",
-    },
-    {
-        "value": "65",
-        "label": "65%+",
-        "description": "Balanced default for most activities.",
-    },
-    {
-        "value": "80",
-        "label": "80%+",
-        "description": "Highest allowed threshold for time-sensitive plans.",
-    },
-]
+DEFAULT_TRACKING_MODE = "GPS ETA is shared only for confirmed attendees."
+DEFAULT_BIO = "Add a short intro so people know what kind of plans you actually enjoy."
+DEFAULT_TRACKING_OPTION = "Visible only after I join"
+DEFAULT_RELIABILITY_SCORE = 80
 DEFAULT_VENUE_COORDS = {"lat": -34.6037, "lng": -58.3816}
 VALID_ETA_STATES = {"checked_in", "arriving_soon", "on_track", "delayed"}
 STATUS_PRIORITY = {"joined": 0, "interested": 1, "waitlist": 2}
+CATEGORIES = [
+    "Workout",
+    "Study",
+    "Social",
+    "Networking",
+    "Wellness",
+]
+INTEREST_OPTIONS = [
+    "Workout",
+    "Study",
+    "Running",
+    "Gym partner",
+    "Language exchange",
+    "Coffee chats",
+    "Dinner plans",
+    "Coworking",
+    "Weekend trips",
+    "Sports",
+    "Wellness",
+    "Events",
+]
+TRACKING_OPTIONS = [
+    "Visible only after I join",
+    "Visible only to event hosts",
+    "Do not show ETA automatically",
+]
+RELIABILITY_THRESHOLDS = [
+    {"value": "50", "label": "50%+", "description": "Open group, low commitment."},
+    {"value": "65", "label": "65%+", "description": "Balanced option for most plans."},
+    {"value": "80", "label": "80%+", "description": "For time-sensitive activities."},
+]
 
 db = SQLAlchemy()
 
@@ -48,6 +66,13 @@ def get_database_uri() -> str:
         elif database_url.startswith("postgresql://"):
             database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
         return database_url
+    instance_connection_name = os.getenv("INSTANCE_CONNECTION_NAME", "").strip()
+    db_name = os.getenv("DB_NAME", "").strip()
+    db_user = os.getenv("DB_USER", "").strip()
+    if instance_connection_name and db_name and db_user:
+        db_password = quote_plus(os.getenv("DB_PASSWORD", ""))
+        socket_dir = quote_plus(f"/cloudsql/{instance_connection_name}")
+        return f"postgresql+psycopg://{quote_plus(db_user)}:{db_password}@/{quote_plus(db_name)}?host={socket_dir}"
     return f"sqlite:///{DEFAULT_DB_PATH}"
 
 
@@ -58,12 +83,15 @@ def utcnow() -> datetime:
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(80), nullable=False, unique=True)
+    email = db.Column(db.String(120), nullable=True)
+    password_hash = db.Column(db.Text, nullable=True)
     city = db.Column(db.String(80), nullable=False)
-    bio = db.Column(db.Text, nullable=False)
+    bio = db.Column(db.Text, nullable=False, default=DEFAULT_BIO)
     interests_csv = db.Column(db.Text, default="", nullable=False)
-    gps_tracking = db.Column(db.String(120), nullable=False)
+    gps_tracking = db.Column(db.String(120), nullable=False, default=DEFAULT_TRACKING_OPTION)
     home_area = db.Column(db.String(80), nullable=False)
-    reliability_score = db.Column(db.Integer, nullable=False)
+    avatar_url = db.Column(db.Text, nullable=True)
+    reliability_score = db.Column(db.Integer, nullable=False, default=DEFAULT_RELIABILITY_SCORE)
 
     hosted_activities = db.relationship("Activity", back_populates="host", lazy="selectin")
     participations = db.relationship("Participation", back_populates="user", lazy="selectin")
@@ -84,6 +112,7 @@ class Activity(db.Model):
     description = db.Column(db.Text, nullable=False)
     capacity = db.Column(db.Integer, nullable=False)
     min_reliability = db.Column(db.Integer, nullable=False)
+    recurring_weekly = db.Column(db.Boolean, nullable=False, default=False)
     tracking_mode = db.Column(db.String(160), nullable=False, default=DEFAULT_TRACKING_MODE)
     venue_lat = db.Column(db.Float, nullable=False, default=DEFAULT_VENUE_COORDS["lat"])
     venue_lng = db.Column(db.Float, nullable=False, default=DEFAULT_VENUE_COORDS["lng"])
@@ -168,20 +197,126 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     with app.app_context():
         db.create_all()
-        seed_database()
+        ensure_schema()
 
     register_routes(app)
     return app
 
 
+def ensure_schema() -> None:
+    inspector = inspect(db.engine)
+    tables = set(inspector.get_table_names())
+    if "user" in tables:
+        user_columns = {column["name"] for column in inspector.get_columns("user")}
+        with db.engine.begin() as connection:
+            if "email" not in user_columns:
+                connection.execute(text('ALTER TABLE "user" ADD COLUMN email VARCHAR(120)'))
+            if "password_hash" not in user_columns:
+                connection.execute(text('ALTER TABLE "user" ADD COLUMN password_hash TEXT'))
+            if "avatar_url" not in user_columns:
+                connection.execute(text('ALTER TABLE "user" ADD COLUMN avatar_url TEXT'))
+    if "activity" in tables:
+        activity_columns = {column["name"] for column in inspector.get_columns("activity")}
+        with db.engine.begin() as connection:
+            if "recurring_weekly" not in activity_columns:
+                connection.execute(text("ALTER TABLE activity ADD COLUMN recurring_weekly BOOLEAN DEFAULT 0"))
+
+
 def register_routes(app: Flask) -> None:
+    @app.context_processor
+    def inject_template_state():
+        current_user = get_current_user(optional=True)
+        return {
+            "viewer": serialize_user(current_user) if current_user else None,
+            "interest_options": INTEREST_OPTIONS,
+        }
+
     @app.get("/healthz")
     def healthcheck():
         return {"ok": True}, 200
 
     @app.route("/")
+    def landing():
+        if get_current_user(optional=True):
+            return redirect(url_for("feed"))
+        return render_template("landing.html")
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        if get_current_user(optional=True):
+            return redirect(url_for("feed"))
+
+        if request.method == "POST":
+            email = request.form.get("email", "").strip().lower()
+            password = request.form.get("password", "")
+            user = User.query.filter(db.func.lower(User.email) == email).first()
+            if user is None or not user.password_hash or not check_password_hash(user.password_hash, password):
+                flash("Incorrect email or password.", "error")
+                return render_template("login.html", email=email), 400
+
+            session.clear()
+            session["user_id"] = user.id
+            flash("Welcome back.", "success")
+            return redirect(resolve_next_url(request.args.get("next")) or url_for("feed"))
+
+        return render_template("login.html", email="")
+
+    @app.route("/register", methods=["GET", "POST"])
+    def register():
+        if get_current_user(optional=True):
+            return redirect(url_for("feed"))
+
+        form_data = {
+            "name": "",
+            "email": "",
+            "city": "",
+            "home_area": "",
+        }
+        if request.method == "POST":
+            form_data = {
+                "name": request.form.get("name", "").strip(),
+                "email": request.form.get("email", "").strip().lower(),
+                "city": request.form.get("city", "").strip(),
+                "home_area": request.form.get("home_area", "").strip(),
+            }
+            password = request.form.get("password", "")
+            errors = validate_registration_form(form_data, password)
+            if errors:
+                for error in errors:
+                    flash(error, "error")
+                return render_template("register.html", form_data=form_data), 400
+
+            user = User(
+                name=form_data["name"],
+                email=form_data["email"],
+                password_hash=generate_password_hash(password),
+                city=form_data["city"],
+                home_area=form_data["home_area"],
+                bio=DEFAULT_BIO,
+                interests_csv="",
+                gps_tracking=DEFAULT_TRACKING_OPTION,
+                reliability_score=DEFAULT_RELIABILITY_SCORE,
+                avatar_url="",
+            )
+            db.session.add(user)
+            db.session.commit()
+            session.clear()
+            session["user_id"] = user.id
+            flash("Account created. Finish your profile before joining plans.", "success")
+            return redirect(url_for("edit_profile"))
+
+        return render_template("register.html", form_data=form_data)
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        flash("You have been signed out.", "info")
+        return redirect(url_for("landing"))
+
+    @app.route("/feed")
+    @login_required
     def feed():
-        current_user = get_current_user()
+        current_user = require_current_user()
         selected_category = request.args.get("category", "All")
         selected_date = request.args.get("date", "")
 
@@ -191,20 +326,25 @@ def register_routes(app: Flask) -> None:
         if selected_date:
             activities = [activity for activity in activities if activity.activity_date.isoformat() == selected_date]
 
+        serialized = [serialize_activity(activity, current_user) for activity in activities]
+        weekly_events = [activity for activity in serialized if activity["is_weekly"]]
+        upcoming_events = [activity for activity in serialized if not activity["is_weekly"]]
         categories = ["All"] + sorted({activity.category for activity in Activity.query.all()})
+
         return render_template(
             "feed.html",
-            activities=[serialize_activity(activity, current_user) for activity in activities],
+            weekly_events=weekly_events,
+            upcoming_events=upcoming_events,
             categories=categories,
-            current_user=serialize_user(current_user),
             selected_category=selected_category,
             selected_date=selected_date,
             today=date.today().isoformat(),
         )
 
     @app.route("/activities/new", methods=["GET", "POST"])
+    @login_required
     def create_activity():
-        current_user = get_current_user()
+        current_user = require_current_user()
         default_roles = [
             {"name": "", "type": "Mandatory", "needed": "1"},
             {"name": "", "type": "Preferred", "needed": "1"},
@@ -218,6 +358,7 @@ def register_routes(app: Flask) -> None:
             "description": "",
             "capacity": "6",
             "min_reliability": RELIABILITY_THRESHOLDS[1]["value"],
+            "recurring_weekly": False,
             "roles": default_roles,
         }
 
@@ -230,7 +371,6 @@ def register_routes(app: Flask) -> None:
                 return render_template(
                     "create_activity.html",
                     categories=CATEGORIES,
-                    current_user=serialize_user(current_user),
                     reliability_thresholds=RELIABILITY_THRESHOLDS,
                     form_data=form_data,
                 ), 400
@@ -244,6 +384,7 @@ def register_routes(app: Flask) -> None:
                 description=cleaned["description"],
                 capacity=cleaned["capacity_value"],
                 min_reliability=cleaned["min_reliability_value"],
+                recurring_weekly=cleaned["recurring_weekly"],
                 tracking_mode=DEFAULT_TRACKING_MODE,
                 venue_lat=DEFAULT_VENUE_COORDS["lat"],
                 venue_lng=DEFAULT_VENUE_COORDS["lng"],
@@ -273,48 +414,43 @@ def register_routes(app: Flask) -> None:
                 )
             )
             db.session.commit()
-            flash("Activity created. You can manage attendees from the host dashboard.", "success")
+            flash("Event created. You can manage attendance from the host dashboard.", "success")
             return redirect(url_for("host_dashboard", activity_id=activity.id))
 
         return render_template(
             "create_activity.html",
             categories=CATEGORIES,
-            current_user=serialize_user(current_user),
             reliability_thresholds=RELIABILITY_THRESHOLDS,
             form_data=form_data,
         )
 
     @app.route("/activities/<int:activity_id>")
+    @login_required
     def activity_detail(activity_id: int):
-        current_user = get_current_user()
+        current_user = require_current_user()
         activity = get_activity_or_404(activity_id)
-        return render_template(
-            "activity_detail.html",
-            activity=serialize_activity(activity, current_user),
-            current_user=serialize_user(current_user),
-        )
+        return render_template("activity_detail.html", activity=serialize_activity(activity, current_user))
 
     @app.post("/activities/<int:activity_id>/join")
+    @login_required
     def join_activity(activity_id: int):
-        current_user = get_current_user()
+        current_user = require_current_user()
         activity = get_activity_or_404(activity_id)
         participation = get_or_create_participation(activity, current_user)
         status, reason = apply_join_request(activity, participation)
         promote_waitlist(activity)
         db.session.commit()
-        if status == "joined":
-            flash("You are confirmed for this activity.", "success")
-        else:
-            flash(reason, "warning")
+        flash("You are confirmed for this plan." if status == "joined" else reason, "success" if status == "joined" else "warning")
         return redirect(url_for("activity_detail", activity_id=activity.id))
 
     @app.post("/activities/<int:activity_id>/interest")
+    @login_required
     def mark_interest(activity_id: int):
-        current_user = get_current_user()
+        current_user = require_current_user()
         activity = get_activity_or_404(activity_id)
         participation = get_or_create_participation(activity, current_user)
         if participation.status == "joined":
-            flash("You already have a confirmed seat.", "info")
+            flash("You already have a confirmed spot.", "info")
         else:
             participation.status = "interested"
             participation.reason = "Following this plan"
@@ -322,31 +458,33 @@ def register_routes(app: Flask) -> None:
             participation.eta_label = "Not committed"
             participation.eta_status = "on_track"
             db.session.commit()
-            flash("You are following this activity without taking a seat.", "success")
+            flash("Saved. You will stay visible without taking a seat yet.", "success")
         return redirect(url_for("activity_detail", activity_id=activity.id))
 
     @app.post("/activities/<int:activity_id>/leave")
+    @login_required
     def leave_activity(activity_id: int):
-        current_user = get_current_user()
+        current_user = require_current_user()
         activity = get_activity_or_404(activity_id)
         participation = find_participation(activity, current_user.id)
         if participation is None:
-            flash("You are not part of this activity yet.", "info")
+            flash("You are not part of this event.", "info")
             return redirect(url_for("activity_detail", activity_id=activity.id))
         if activity.host_id == current_user.id:
-            flash("Hosts cannot leave their own activity.", "error")
+            flash("Hosts cannot leave their own event.", "error")
             return redirect(url_for("activity_detail", activity_id=activity.id))
 
         db.session.delete(participation)
         db.session.flush()
         promote_waitlist(activity)
         db.session.commit()
-        flash("You have left this activity.", "success")
+        flash("You have left the event.", "success")
         return redirect(url_for("activity_detail", activity_id=activity.id))
 
     @app.post("/activities/<int:activity_id>/messages")
+    @login_required
     def post_message(activity_id: int):
-        current_user = get_current_user()
+        current_user = require_current_user()
         activity = get_activity_or_404(activity_id)
         body = request.form.get("body", "").strip()
         if not body:
@@ -355,21 +493,22 @@ def register_routes(app: Flask) -> None:
 
         participation = find_participation(activity, current_user.id)
         if participation is None and activity.host_id != current_user.id:
-            flash("Join or mark interest before posting in the activity chat.", "error")
+            flash("Join or follow the event before using the chat.", "error")
             return redirect(url_for("activity_detail", activity_id=activity.id))
 
-        db.session.add(Message(activity=activity, author=current_user, body=body))
+        db.session.add(Message(activity=activity, author=current_user, body=body[:400]))
         db.session.commit()
         flash("Message sent.", "success")
         return redirect(url_for("activity_detail", activity_id=activity.id))
 
     @app.post("/activities/<int:activity_id>/eta")
+    @login_required
     def update_eta(activity_id: int):
-        current_user = get_current_user()
+        current_user = require_current_user()
         activity = get_activity_or_404(activity_id)
         participation = find_participation(activity, current_user.id)
         if participation is None or participation.status != "joined":
-            return jsonify({"error": "Join the activity before sharing ETA."}), 400
+            return jsonify({"error": "Join the event before sharing ETA."}), 400
 
         payload = request.get_json(silent=True) or {}
         eta_status = str(payload.get("eta_status", "")).strip()
@@ -383,19 +522,17 @@ def register_routes(app: Flask) -> None:
         return jsonify({"ok": True, "eta_status": eta_status, "eta_label": participation.eta_label})
 
     @app.route("/activities/<int:activity_id>/host")
+    @login_required
     def host_dashboard(activity_id: int):
-        current_user = get_current_user()
+        current_user = require_current_user()
         activity = get_activity_or_404(activity_id)
         require_host_access(activity, current_user)
-        return render_template(
-            "host_dashboard.html",
-            activity=serialize_activity(activity, current_user),
-            current_user=serialize_user(current_user),
-        )
+        return render_template("host_dashboard.html", activity=serialize_activity(activity, current_user))
 
     @app.post("/activities/<int:activity_id>/host/participants/<int:participation_id>")
+    @login_required
     def update_participant(activity_id: int, participation_id: int):
-        current_user = get_current_user()
+        current_user = require_current_user()
         activity = get_activity_or_404(activity_id)
         require_host_access(activity, current_user)
 
@@ -411,7 +548,7 @@ def register_routes(app: Flask) -> None:
             db.session.flush()
             promote_waitlist(activity)
             db.session.commit()
-            flash("Participant removed from the activity.", "success")
+            flash("Participant removed.", "success")
             return redirect(url_for("host_dashboard", activity_id=activity.id))
 
         if new_status not in {"joined", "interested", "waitlist"}:
@@ -421,7 +558,7 @@ def register_routes(app: Flask) -> None:
         if assigned_role_id:
             role = Role.query.filter_by(id=int(assigned_role_id), activity_id=activity.id).first()
             if role is None:
-                flash("Selected role does not belong to this activity.", "error")
+                flash("Selected role does not belong to this event.", "error")
                 return redirect(url_for("host_dashboard", activity_id=activity.id))
             participation.assigned_role = role
         else:
@@ -430,8 +567,8 @@ def register_routes(app: Flask) -> None:
         if new_status == "joined":
             if not can_confirm_join(activity, participation, host_override=True):
                 participation.status = "waitlist"
-                participation.reason = "Activity is at capacity"
-                flash("No capacity left. The participant stays on the waitlist.", "warning")
+                participation.reason = "Event is already at capacity."
+                flash("No seats left. The participant stays on the waitlist.", "warning")
             else:
                 participation.status = "joined"
                 participation.reason = "Confirmed by host"
@@ -446,7 +583,7 @@ def register_routes(app: Flask) -> None:
             flash("Participant moved to interested.", "success")
         else:
             participation.status = "waitlist"
-            participation.reason = "Pending host approval"
+            participation.reason = "Pending host review"
             participation.eta_label = "Waitlisted"
             participation.eta_status = "delayed"
             flash("Participant moved to the waitlist.", "success")
@@ -456,37 +593,127 @@ def register_routes(app: Flask) -> None:
         return redirect(url_for("host_dashboard", activity_id=activity.id))
 
     @app.route("/profile")
+    @login_required
     def profile():
-        current_user = get_current_user()
+        current_user = require_current_user()
         upcoming = (
             Activity.query.join(Participation)
             .filter(
                 Participation.user_id == current_user.id,
                 Participation.status == "joined",
-                Activity.host_id != current_user.id,
                 Activity.activity_date >= date.today(),
             )
             .options(joinedload(Activity.host), joinedload(Activity.roles), joinedload(Activity.participations))
-            .order_by(Activity.activity_date, Activity.start_time)
+            .order_by(Activity.recurring_weekly.desc(), Activity.activity_date, Activity.start_time)
             .all()
         )
         hosted = (
             Activity.query.filter_by(host_id=current_user.id)
             .options(joinedload(Activity.roles), joinedload(Activity.participations))
-            .order_by(Activity.activity_date, Activity.start_time)
+            .order_by(Activity.recurring_weekly.desc(), Activity.activity_date, Activity.start_time)
             .all()
         )
+        recurring = [serialize_activity_summary(activity) for activity in upcoming if activity.recurring_weekly]
         return render_template(
             "profile.html",
             current_user=serialize_user(current_user),
             upcoming=[serialize_activity_summary(activity) for activity in upcoming],
             hosted=[serialize_activity_summary(activity) for activity in hosted],
+            recurring=recurring,
         )
+
+    @app.route("/profile/edit", methods=["GET", "POST"])
+    @login_required
+    def edit_profile():
+        current_user = require_current_user()
+        form_data = profile_form_defaults(current_user)
+        if request.method == "POST":
+            form_data = extract_profile_form(request.form, current_user)
+            errors = validate_profile_form(current_user, form_data)
+            if errors:
+                for error in errors:
+                    flash(error, "error")
+                return render_template("edit_profile.html", form_data=form_data, tracking_options=TRACKING_OPTIONS), 400
+
+            current_user.name = form_data["name"]
+            current_user.email = form_data["email"]
+            current_user.city = form_data["city"]
+            current_user.home_area = form_data["home_area"]
+            current_user.bio = form_data["bio"]
+            current_user.avatar_url = form_data["avatar_url"]
+            current_user.gps_tracking = form_data["gps_tracking"]
+            current_user.interests_csv = "|".join(form_data["interests"])
+            db.session.commit()
+            flash("Profile updated.", "success")
+            return redirect(url_for("profile"))
+
+        return render_template("edit_profile.html", form_data=form_data, tracking_options=TRACKING_OPTIONS)
 
     @app.errorhandler(403)
     def forbidden(_error):
-        current_user = get_current_user()
-        return render_template("forbidden.html", current_user=serialize_user(current_user)), 403
+        return render_template("forbidden.html"), 403
+
+    @app.errorhandler(404)
+    def not_found(_error):
+        return render_template("not_found.html"), 404
+
+
+def resolve_next_url(candidate: str | None) -> str | None:
+    if candidate and candidate.startswith("/"):
+        return candidate
+    return None
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if get_current_user(optional=True) is None:
+            return redirect(url_for("login", next=request.path))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def get_current_user(*, optional: bool = False) -> User | None:
+    if getattr(g, "_current_user_loaded", False):
+        user = getattr(g, "current_user", None)
+        if user is None and not optional:
+            abort(401)
+        return user
+
+    user_id = session.get("user_id")
+    user = db.session.get(User, user_id) if user_id else None
+    g._current_user_loaded = True
+    g.current_user = user
+    if user is None and not optional:
+        abort(401)
+    return user
+
+
+def require_current_user() -> User:
+    user = get_current_user(optional=True)
+    if user is None:
+        abort(401)
+    return user
+
+
+def validate_registration_form(form_data: dict, password: str) -> list[str]:
+    errors: list[str] = []
+    if not form_data["name"]:
+        errors.append("Name is required.")
+    if not form_data["email"] or "@" not in form_data["email"]:
+        errors.append("Use a valid email address.")
+    if len(password) < 8:
+        errors.append("Password must be at least 8 characters.")
+    if not form_data["city"]:
+        errors.append("City is required.")
+    if not form_data["home_area"]:
+        errors.append("Neighborhood or area is required.")
+    if User.query.filter_by(name=form_data["name"]).first():
+        errors.append("That display name is already taken.")
+    if User.query.filter(db.func.lower(User.email) == form_data["email"]).first():
+        errors.append("An account with that email already exists.")
+    return errors
 
 
 def validate_activity_form(form) -> tuple[dict, list[str]]:
@@ -499,6 +726,7 @@ def validate_activity_form(form) -> tuple[dict, list[str]]:
     description = form.get("description", "").strip()
     capacity_raw = form.get("capacity", "").strip()
     min_reliability_raw = form.get("min_reliability", "").strip()
+    recurring_weekly = form.get("recurring_weekly") == "on"
 
     cleaned = {
         "title": title,
@@ -509,6 +737,7 @@ def validate_activity_form(form) -> tuple[dict, list[str]]:
         "description": description,
         "capacity": capacity_raw,
         "min_reliability": min_reliability_raw,
+        "recurring_weekly": recurring_weekly,
         "roles": [],
     }
 
@@ -581,11 +810,69 @@ def validate_activity_form(form) -> tuple[dict, list[str]]:
     return cleaned, errors
 
 
-def get_current_user() -> User:
-    user = User.query.filter_by(name=CURRENT_USER_NAME).first()
-    if user is None:
-        raise RuntimeError("Current user seed is missing.")
-    return user
+def profile_form_defaults(user: User) -> dict:
+    return {
+        "name": user.name,
+        "email": user.email or "",
+        "city": user.city,
+        "home_area": user.home_area,
+        "bio": user.bio,
+        "avatar_url": user.avatar_url or "",
+        "gps_tracking": user.gps_tracking,
+        "interests": list(user.interests),
+        "custom_interests": "",
+    }
+
+
+def extract_profile_form(form, current_user: User) -> dict:
+    selected = [item.strip() for item in form.getlist("interests") if item.strip()]
+    custom = [
+        item.strip()
+        for item in form.get("custom_interests", "").split(",")
+        if item.strip()
+    ]
+    deduped: list[str] = []
+    for item in selected + custom:
+        if item not in deduped:
+            deduped.append(item)
+
+    return {
+        "name": form.get("name", "").strip(),
+        "email": form.get("email", "").strip().lower(),
+        "city": form.get("city", "").strip(),
+        "home_area": form.get("home_area", "").strip(),
+        "bio": form.get("bio", "").strip(),
+        "avatar_url": form.get("avatar_url", "").strip(),
+        "gps_tracking": form.get("gps_tracking", "").strip() or current_user.gps_tracking,
+        "interests": deduped,
+        "custom_interests": form.get("custom_interests", "").strip(),
+    }
+
+
+def validate_profile_form(current_user: User, form_data: dict) -> list[str]:
+    errors: list[str] = []
+    if not form_data["name"]:
+        errors.append("Name is required.")
+    if not form_data["email"] or "@" not in form_data["email"]:
+        errors.append("Use a valid email address.")
+    if not form_data["city"]:
+        errors.append("City is required.")
+    if not form_data["home_area"]:
+        errors.append("Neighborhood or area is required.")
+    if not form_data["bio"]:
+        errors.append("Bio is required.")
+    if not form_data["interests"]:
+        errors.append("Choose at least one interest.")
+    if form_data["gps_tracking"] not in TRACKING_OPTIONS:
+        errors.append("Choose a valid tracking preference.")
+
+    duplicate_name = User.query.filter(User.name == form_data["name"], User.id != current_user.id).first()
+    duplicate_email = User.query.filter(db.func.lower(User.email) == form_data["email"], User.id != current_user.id).first()
+    if duplicate_name:
+        errors.append("That display name is already in use.")
+    if duplicate_email:
+        errors.append("That email is already in use.")
+    return errors
 
 
 def load_activities() -> list[Activity]:
@@ -597,7 +884,7 @@ def load_activities() -> list[Activity]:
             joinedload(Activity.participations).joinedload(Participation.assigned_role),
             joinedload(Activity.messages).joinedload(Message.author),
         )
-        .order_by(Activity.activity_date, Activity.start_time)
+        .order_by(Activity.recurring_weekly.desc(), Activity.activity_date, Activity.start_time)
         .all()
     )
 
@@ -693,13 +980,13 @@ def waitlist_reason(activity: Activity, participation: Participation) -> str:
     occupied = count_joined(activity, exclude_participation_id=participation.id)
     remaining_capacity = activity.capacity - occupied
     if participation.user.reliability_score < activity.min_reliability:
-        return "Your reliability score is below this activity's minimum."
+        return "Your reliability score is below this event's minimum."
     protected = protected_mandatory_seats(activity, exclude_participation_id=participation.id)
     if remaining_capacity <= 0:
-        return "The activity is currently full."
+        return "This event is already full."
     if protected >= remaining_capacity:
         return "Mandatory role seats are still protected by the host."
-    return "This activity requires host review before confirmation."
+    return "This event still needs host review."
 
 
 def apply_join_request(activity: Activity, participation: Participation) -> tuple[str, str]:
@@ -739,11 +1026,14 @@ def serialize_user(user: User) -> dict:
     return {
         "id": user.id,
         "name": user.name,
+        "email": user.email or "",
         "city": user.city,
         "bio": user.bio,
         "interests": user.interests,
         "gps_tracking": user.gps_tracking,
         "home_area": user.home_area,
+        "avatar_url": user.avatar_url or "",
+        "initials": initials_for_name(user.name),
         "stats": {
             "joined": joined_count,
             "hosted": hosted_count,
@@ -759,27 +1049,20 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
     waitlist = [item for item in activity.participations if item.status == "waitlist"]
     viewer_participation = find_participation(activity, current_user.id)
 
-    roles = []
-    for role in activity.roles:
-        roles.append(
-            {
-                "id": role.id,
-                "name": role.name,
-                "type": role.role_type,
-                "filled": role_counts.get(role.id, 0),
-                "needed": role.needed_count,
-            }
-        )
+    roles = [
+        {
+            "id": role.id,
+            "name": role.name,
+            "type": role.role_type,
+            "filled": role_counts.get(role.id, 0),
+            "needed": role.needed_count,
+        }
+        for role in activity.roles
+    ]
 
-    attendees = []
     eta_summary = {"arriving_soon": 0, "on_track": 0, "delayed": 0}
-    for participation in sorted(
-        joined,
-        key=lambda item: (
-            0 if item.user_id == activity.host_id else 1,
-            item.user.name.lower(),
-        ),
-    ):
+    attendees = []
+    for participation in sorted(joined, key=lambda item: (0 if item.user_id == activity.host_id else 1, item.user.name.lower())):
         if participation.eta_status in eta_summary:
             eta_summary[participation.eta_status] += 1
         attendees.append(
@@ -790,44 +1073,27 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
                 "eta": participation.eta_label,
                 "status": participation.eta_status,
                 "reliability": reliability_label(participation.user.reliability_score),
-                "current_status": participation.status,
                 "assigned_role_id": participation.assigned_role_id or "",
             }
         )
-
-    interested_users = [
-        {
-            "id": item.id,
-            "name": item.user.name,
-            "reliability": reliability_label(item.user.reliability_score),
-            "assigned_role_id": item.assigned_role_id or "",
-        }
-        for item in sorted(interested, key=lambda item: item.user.name.lower())
-    ]
-    waitlist_users = [
-        {
-            "id": item.id,
-            "name": item.user.name,
-            "reliability": reliability_label(item.user.reliability_score),
-            "reason": item.reason or waitlist_reason(activity, item),
-            "assigned_role_id": item.assigned_role_id or "",
-        }
-        for item in sorted(waitlist, key=lambda item: (-item.user.reliability_score, item.user.name.lower()))
-    ]
 
     return {
         "id": activity.id,
         "title": activity.title,
         "category": activity.category,
         "date": activity.activity_date.isoformat(),
+        "date_label": display_event_date(activity.activity_date),
+        "weekday": activity.activity_date.strftime("%a"),
         "time": display_time(activity.start_time),
         "location": activity.location,
         "host": activity.host.name,
         "description": activity.description,
+        "summary": truncate(activity.description, 140),
         "capacity": activity.capacity,
         "joined": len(joined),
         "interested": len(interested),
         "waitlist_count": len(waitlist),
+        "spots_left": max(activity.capacity - len(joined), 0),
         "venue_coords": {"lat": activity.venue_lat, "lng": activity.venue_lng},
         "tracking_mode": activity.tracking_mode,
         "reliability": {
@@ -837,9 +1103,27 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
         "eta_summary": eta_summary,
         "status": activity_status(activity, roles),
         "roles": roles,
+        "role_summary": role_summary(roles),
         "attendees": attendees,
-        "interested_users": interested_users,
-        "waitlist": waitlist_users,
+        "interested_users": [
+            {
+                "id": item.id,
+                "name": item.user.name,
+                "reliability": reliability_label(item.user.reliability_score),
+                "assigned_role_id": item.assigned_role_id or "",
+            }
+            for item in sorted(interested, key=lambda item: item.user.name.lower())
+        ],
+        "waitlist": [
+            {
+                "id": item.id,
+                "name": item.user.name,
+                "reliability": reliability_label(item.user.reliability_score),
+                "reason": item.reason or waitlist_reason(activity, item),
+                "assigned_role_id": item.assigned_role_id or "",
+            }
+            for item in sorted(waitlist, key=lambda item: (-item.user.reliability_score, item.user.name.lower()))
+        ],
         "messages": [
             {
                 "author": message.author.name,
@@ -852,32 +1136,34 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
         "viewer_eta": viewer_participation.eta_label if viewer_participation else "Join to share ETA",
         "viewer_can_manage": activity.host_id == current_user.id,
         "viewer_is_host": activity.host_id == current_user.id,
-        "viewer_assigned_role_id": viewer_participation.assigned_role_id if viewer_participation else "",
+        "is_weekly": activity.recurring_weekly,
+        "recurrence_label": "Weekly circle" if activity.recurring_weekly else "One-time plan",
     }
 
 
 def serialize_activity_summary(activity: Activity) -> dict:
+    serialized_roles = [
+        {
+            "id": role.id,
+            "name": role.name,
+            "type": role.role_type,
+            "filled": role_fill_counts(activity).get(role.id, 0),
+            "needed": role.needed_count,
+        }
+        for role in activity.roles
+    ]
     return {
         "id": activity.id,
         "title": activity.title,
         "date": activity.activity_date.isoformat(),
+        "date_label": display_event_date(activity.activity_date),
         "time": display_time(activity.start_time),
         "category": activity.category,
-        "status": activity_status(
-            activity,
-            [
-                {
-                    "id": role.id,
-                    "name": role.name,
-                    "type": role.role_type,
-                    "filled": role_fill_counts(activity).get(role.id, 0),
-                    "needed": role.needed_count,
-                }
-                for role in activity.roles
-            ],
-        ),
+        "location": activity.location,
+        "status": activity_status(activity, serialized_roles),
         "joined": count_joined(activity),
         "capacity": activity.capacity,
+        "is_weekly": activity.recurring_weekly,
     }
 
 
@@ -893,14 +1179,19 @@ def activity_status(activity: Activity, serialized_roles: list[dict]) -> str:
         if role["type"] == "preferred"
     )
     if mandatory_remaining:
-        label = "seat" if mandatory_remaining == 1 else "seats"
-        return f"{mandatory_remaining} mandatory {label} still protected"
+        return f"{mandatory_remaining} protected seat{'s' if mandatory_remaining != 1 else ''}"
     if preferred_remaining:
-        label = "role" if preferred_remaining == 1 else "roles"
-        return f"{preferred_remaining} preferred {label} still open"
+        return f"{preferred_remaining} open role{'s' if preferred_remaining != 1 else ''}"
     if count_joined(activity) >= activity.capacity:
-        return "Activity is full"
-    return "Mandatory coverage complete"
+        return "Full"
+    return "Open"
+
+
+def role_summary(roles: list[dict]) -> str:
+    if not roles:
+        return "No roles assigned"
+    important = [f"{role['name']} {role['filled']}/{role['needed']}" for role in roles[:2]]
+    return " • ".join(important)
 
 
 def resolve_display_role(activity: Activity, participation: Participation) -> str:
@@ -917,10 +1208,10 @@ def reliability_label(score: int) -> str:
 
 def reliability_note(min_reliability: int) -> str:
     if min_reliability >= 80:
-        return "This session is strict because it starts on time and depends on reliable attendance."
+        return "This event expects reliable attendance and on-time arrivals."
     if min_reliability >= 65:
-        return "The host wants a dependable group, but there is still some flexibility."
-    return "This is an open plan, but the host still prefers people who usually show up."
+        return "Balanced commitment: useful for small groups that still need accountability."
+    return "Open group. People can signal interest before fully committing."
 
 
 def display_time(value: time) -> str:
@@ -931,263 +1222,23 @@ def display_chat_time(value: datetime) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
 
 
-def seed_database() -> None:
-    if User.query.first() is not None:
-        return
+def display_event_date(value: date) -> str:
+    return value.strftime("%b %d, %Y")
 
-    user_specs = {
-        "Ari Foster": {
-            "city": "Buenos Aires",
-            "bio": "I like structured study sessions, pickup sports, and plans that actually start on time.",
-            "interests": ["Study Session", "Gym Session", "Weekend Plan"],
-            "gps_tracking": "Enabled for joined activities only",
-            "home_area": "Palermo",
-            "reliability_score": 96,
-        },
-        "Maya": {"reliability_score": 98},
-        "Lucas": {"reliability_score": 94},
-        "Sara": {"reliability_score": 79},
-        "Nico": {"reliability_score": 91},
-        "Ana": {"reliability_score": 88},
-        "Paula": {"reliability_score": 83},
-        "Iker": {"reliability_score": 76},
-        "Caro": {"reliability_score": 92},
-        "Jules": {"reliability_score": 81},
-        "Jin": {"reliability_score": 97},
-        "Leila": {"reliability_score": 96},
-        "Omar": {"reliability_score": 98},
-        "Tina": {"reliability_score": 95},
-        "Milo": {"reliability_score": 84},
-        "Nadia": {"reliability_score": 90},
-        "Sofia": {"reliability_score": 78},
-        "Rayan": {"reliability_score": 87},
-        "Camila": {"reliability_score": 93},
-        "Mateo": {"reliability_score": 89},
-        "Priya": {"reliability_score": 86},
-        "Lena": {"reliability_score": 72},
-        "Bruno": {"reliability_score": 67},
-        "Ava": {"reliability_score": 91},
-        "Noah": {"reliability_score": 88},
-        "Elena": {"reliability_score": 85},
-        "Santi": {"reliability_score": 82},
-        "Tomas": {"reliability_score": 77},
-    }
 
-    users: dict[str, User] = {}
-    for name, spec in user_specs.items():
-        interests = spec.get("interests", [])
-        user = User(
-            name=name,
-            city=spec.get("city", "Buenos Aires"),
-            bio=spec.get("bio", f"{name} likes campus activities that start when everyone is actually ready."),
-            interests_csv="|".join(interests),
-            gps_tracking=spec.get("gps_tracking", "Enabled while joined activities are active"),
-            home_area=spec.get("home_area", "Palermo"),
-            reliability_score=spec["reliability_score"],
-        )
-        db.session.add(user)
-        users[name] = user
+def initials_for_name(name: str) -> str:
+    parts = [part for part in name.split() if part]
+    if not parts:
+        return "?"
+    if len(parts) == 1:
+        return parts[0][0].upper()
+    return f"{parts[0][0]}{parts[-1][0]}".upper()
 
-    db.session.flush()
 
-    today = date.today()
-    activity_specs = [
-        {
-            "title": "Friday Movie Night",
-            "category": "Movie Night",
-            "day_offset": 1,
-            "time": "20:00",
-            "location": "Recoleta Student Residence",
-            "host": "Maya",
-            "description": "Watching a feel-good movie, bringing snacks, and keeping it low-key.",
-            "capacity": 8,
-            "min_reliability": 50,
-            "coords": {"lat": -34.5895, "lng": -58.3974},
-            "roles": [
-                {"name": "Snack Lead", "type": "mandatory", "needed": 1},
-                {"name": "Projector Setup", "type": "mandatory", "needed": 1},
-                {"name": "Playlist Helper", "type": "preferred", "needed": 2},
-            ],
-            "joined": [
-                {"name": "Maya", "role": None, "eta": "At venue", "eta_status": "checked_in", "reason": "Host"},
-                {"name": "Lucas", "role": "Snack Lead", "eta": "6 min away", "eta_status": "arriving_soon"},
-                {"name": "Sara", "role": None, "eta": "14 min away", "eta_status": "delayed"},
-                {"name": "Nico", "role": "Playlist Helper", "eta": "9 min away", "eta_status": "on_track"},
-                {"name": "Ana", "role": None, "eta": "4 min away", "eta_status": "arriving_soon"},
-            ],
-            "interested": [{"name": "Paula"}, {"name": "Iker"}, {"name": "Caro"}],
-            "waitlist": [{"name": "Jules", "reason": "Mandatory role seats are still protected by the host."}],
-            "messages": [
-                {"author": "Maya", "body": "Bring a blanket if you want, the living room gets cold.", "minutes_ago": 75},
-                {"author": "Lucas", "body": "I can handle chips and drinks.", "minutes_ago": 72},
-                {"author": "Sara", "body": "Running a bit late but still coming.", "minutes_ago": 68},
-            ],
-        },
-        {
-            "title": "Campus Study Sprint",
-            "category": "Study Session",
-            "day_offset": 2,
-            "time": "14:00",
-            "location": "Engineering Library",
-            "host": "Jin",
-            "description": "Two-hour focused study block for calculus and physics.",
-            "capacity": 6,
-            "min_reliability": 80,
-            "coords": {"lat": -34.6032, "lng": -58.3817},
-            "roles": [
-                {"name": "Whiteboard Spotter", "type": "mandatory", "needed": 1},
-                {"name": "Problem Set Lead", "type": "preferred", "needed": 1},
-            ],
-            "joined": [
-                {"name": "Jin", "role": None, "eta": "At venue", "eta_status": "checked_in", "reason": "Host"},
-                {"name": "Ari Foster", "role": None, "eta": "ETA hidden", "eta_status": "on_track"},
-                {"name": "Leila", "role": "Whiteboard Spotter", "eta": "3 min away", "eta_status": "arriving_soon"},
-                {"name": "Omar", "role": "Problem Set Lead", "eta": "8 min away", "eta_status": "on_track"},
-            ],
-            "interested": [{"name": "Milo"}, {"name": "Nadia"}],
-            "waitlist": [
-                {"name": "Sofia", "reason": "Your reliability score is below this activity's minimum."},
-                {"name": "Rayan", "reason": "Mandatory role seats are still protected by the host."},
-            ],
-            "messages": [
-                {"author": "Jin", "body": "Bring your own notes. I reserved a table for six.", "minutes_ago": 95},
-                {"author": "Omar", "body": "I will share the toughest practice problems first.", "minutes_ago": 84},
-            ],
-        },
-        {
-            "title": "Saturday Gym Crew",
-            "category": "Gym Session",
-            "day_offset": 3,
-            "time": "10:00",
-            "location": "Club Atletico Center",
-            "host": "Camila",
-            "description": "Leg day, cardio finisher, then smoothies nearby.",
-            "capacity": 5,
-            "min_reliability": 65,
-            "coords": {"lat": -34.6158, "lng": -58.4333},
-            "roles": [
-                {"name": "Warmup Lead", "type": "mandatory", "needed": 1},
-                {"name": "Form Check Buddy", "type": "optional", "needed": 2},
-            ],
-            "joined": [
-                {"name": "Camila", "role": None, "eta": "At venue", "eta_status": "checked_in", "reason": "Host"},
-                {"name": "Mateo", "role": "Warmup Lead", "eta": "7 min away", "eta_status": "on_track"},
-                {"name": "Ari Foster", "role": None, "eta": "ETA hidden", "eta_status": "on_track"},
-            ],
-            "interested": [{"name": "Lena"}, {"name": "Bruno"}, {"name": "Ava"}],
-            "waitlist": [],
-            "messages": [
-                {"author": "Camila", "body": "Meet near the front desk before we head in.", "minutes_ago": 50},
-            ],
-        },
-        {
-            "title": "Sunday Brunch Planning",
-            "category": "Weekend Plan",
-            "day_offset": 4,
-            "time": "11:30",
-            "location": "Palermo Coffee Lab",
-            "host": "Ari Foster",
-            "description": "Planning a relaxed brunch route and splitting who books the table and who checks nearby spots.",
-            "capacity": 6,
-            "min_reliability": 65,
-            "coords": {"lat": -34.5875, "lng": -58.4262},
-            "roles": [
-                {"name": "Table Booker", "type": "mandatory", "needed": 1},
-                {"name": "Backup Cafe Scout", "type": "preferred", "needed": 1},
-            ],
-            "joined": [
-                {"name": "Ari Foster", "role": None, "eta": "At venue", "eta_status": "checked_in", "reason": "Host"},
-                {"name": "Noah", "role": "Table Booker", "eta": "5 min away", "eta_status": "arriving_soon"},
-            ],
-            "interested": [{"name": "Elena"}],
-            "waitlist": [
-                {"name": "Santi", "reason": "Mandatory role seats are still protected by the host."},
-                {"name": "Tomas", "reason": "Mandatory role seats are still protected by the host."},
-            ],
-            "messages": [
-                {"author": "Ari Foster", "body": "If we confirm four people, I will book one of the bigger tables.", "minutes_ago": 42},
-            ],
-        },
-    ]
-
-    for spec in activity_specs:
-        activity = Activity(
-            title=spec["title"],
-            category=spec["category"],
-            activity_date=today + timedelta(days=spec["day_offset"]),
-            start_time=time.fromisoformat(spec["time"]),
-            location=spec["location"],
-            description=spec["description"],
-            capacity=spec["capacity"],
-            min_reliability=spec["min_reliability"],
-            tracking_mode=DEFAULT_TRACKING_MODE,
-            venue_lat=spec["coords"]["lat"],
-            venue_lng=spec["coords"]["lng"],
-            host=users[spec["host"]],
-        )
-        db.session.add(activity)
-        db.session.flush()
-
-        role_map: dict[str, Role] = {}
-        for role_spec in spec["roles"]:
-            role = Role(
-                activity=activity,
-                name=role_spec["name"],
-                role_type=role_spec["type"],
-                needed_count=role_spec["needed"],
-            )
-            db.session.add(role)
-            db.session.flush()
-            role_map[role.name] = role
-
-        for joined_spec in spec["joined"]:
-            db.session.add(
-                Participation(
-                    activity=activity,
-                    user=users[joined_spec["name"]],
-                    status="joined",
-                    reason=joined_spec.get("reason", "Confirmed"),
-                    assigned_role=role_map.get(joined_spec["role"]) if joined_spec["role"] else None,
-                    eta_label=joined_spec["eta"],
-                    eta_status=joined_spec["eta_status"],
-                )
-            )
-
-        for interested_spec in spec["interested"]:
-            db.session.add(
-                Participation(
-                    activity=activity,
-                    user=users[interested_spec["name"]],
-                    status="interested",
-                    reason="Following this plan",
-                    eta_label="Not committed",
-                    eta_status="on_track",
-                )
-            )
-
-        for waitlist_spec in spec["waitlist"]:
-            db.session.add(
-                Participation(
-                    activity=activity,
-                    user=users[waitlist_spec["name"]],
-                    status="waitlist",
-                    reason=waitlist_spec["reason"],
-                    eta_label="Waitlisted",
-                    eta_status="delayed",
-                )
-            )
-
-        for message_spec in spec["messages"]:
-            db.session.add(
-                Message(
-                    activity=activity,
-                    author=users[message_spec["author"]],
-                    body=message_spec["body"],
-                    created_at=utcnow() - timedelta(minutes=message_spec["minutes_ago"]),
-                )
-            )
-
-    db.session.commit()
+def truncate(text_value: str, limit: int) -> str:
+    if len(text_value) <= limit:
+        return text_value
+    return f"{text_value[: limit - 1].rstrip()}…"
 
 
 app = create_app()

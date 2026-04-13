@@ -3,111 +3,82 @@
 {% block title %}EventMatch | {{ activity.title }}{% endblock %}
 
 {% block content %}
+<section class="page-header">
+  <a class="back-link" href="{{ url_for('feed') }}">← Back to feed</a>
+  {% if activity.viewer_is_host %}
+  <a class="secondary-button" href="{{ url_for('host_dashboard', activity_id=activity.id) }}">Host dashboard</a>
+  {% endif %}
+</section>
+
 <section class="detail-header card">
   <div>
     <div class="activity-meta">
       <span class="pill">{{ activity.category }}</span>
-      <span>{{ activity.date }} • {{ activity.time }}</span>
+      <span>{{ activity.date_label }} • {{ activity.time }}</span>
+      {% if activity.is_weekly %}
+      <span class="signal-badge">{{ activity.recurrence_label }}</span>
+      {% endif %}
     </div>
     <h1>{{ activity.title }}</h1>
-    <p>{{ activity.description }}</p>
+    <p class="lead">{{ activity.location }} • hosted by {{ activity.host }}</p>
+    <p class="support-copy">{{ activity.description }}</p>
   </div>
   <div class="detail-actions">
-    {% if activity.viewer_is_host %}
-    <a class="primary-button" href="{{ url_for('host_dashboard', activity_id=activity.id) }}">Open host dashboard</a>
-    {% else %}
-    {% if activity.viewer_status != "joined" %}
-    <form method="post" action="{{ url_for('join_activity', activity_id=activity.id) }}">
-      <button class="primary-button" type="submit">
-        {% if activity.viewer_status == "waitlist" %}Try join again{% else %}Join activity{% endif %}
-      </button>
-    </form>
-    {% endif %}
-    {% if activity.viewer_status == "none" %}
-    <form method="post" action="{{ url_for('mark_interest', activity_id=activity.id) }}">
-      <button class="secondary-button" type="submit">Interested</button>
-    </form>
-    {% endif %}
-    {% if activity.viewer_status in ["joined", "interested", "waitlist"] %}
-    <form method="post" action="{{ url_for('leave_activity', activity_id=activity.id) }}">
-      <button class="secondary-button" type="submit">Leave</button>
-    </form>
-    {% endif %}
+    {% if not activity.viewer_is_host %}
+      {% if activity.viewer_status != "joined" %}
+      <form method="post" action="{{ url_for('join_activity', activity_id=activity.id) }}">
+        <button class="primary-button" type="submit">{% if activity.viewer_status == "waitlist" %}Try joining again{% else %}Join{% endif %}</button>
+      </form>
+      {% endif %}
+      {% if activity.viewer_status == "none" %}
+      <form method="post" action="{{ url_for('mark_interest', activity_id=activity.id) }}">
+        <button class="secondary-button" type="submit">Follow</button>
+      </form>
+      {% endif %}
+      {% if activity.viewer_status in ["joined", "interested", "waitlist"] %}
+      <form method="post" action="{{ url_for('leave_activity', activity_id=activity.id) }}">
+        <button class="secondary-button" type="submit">Leave</button>
+      </form>
+      {% endif %}
     {% endif %}
   </div>
 </section>
-
-{% if activity.viewer_status != "none" %}
-<section class="card">
-  <p class="section-label">Your status</p>
-  <h2>{{ activity.viewer_status|replace("_", " ")|title }}</h2>
-  <p class="status-note">
-    {% if activity.viewer_status == "waitlist" %}
-    You are waiting for a seat or a host approval.
-    {% elif activity.viewer_status == "interested" %}
-    You are following this plan without taking a seat.
-    {% else %}
-    You are confirmed for this activity.
-    {% endif %}
-  </p>
-</section>
-{% endif %}
 
 <section class="detail-grid">
   <article class="card">
-    <p class="section-label">Plan details</p>
-    <dl class="info-list">
-      <div>
-        <dt>Location</dt>
-        <dd>{{ activity.location }}</dd>
-      </div>
-      <div>
-        <dt>Host</dt>
-        <dd>{{ activity.host }}</dd>
-      </div>
-      <div>
-        <dt>Capacity</dt>
-        <dd>{{ activity.joined }}/{{ activity.capacity }}</dd>
-      </div>
-      <div>
-        <dt>Minimum reliability</dt>
-        <dd>{{ activity.reliability.minimum }}</dd>
-      </div>
-    </dl>
-
-    <div class="tracking-note premium-note">
-      <strong>Host expectation</strong>
-      <p>{{ activity.reliability.note }}</p>
+    <p class="section-label">Event summary</p>
+    <div class="stats-grid">
+      <div class="stat-card"><span>Joined</span><strong>{{ activity.joined }}/{{ activity.capacity }}</strong></div>
+      <div class="stat-card"><span>Waitlist</span><strong>{{ activity.waitlist_count }}</strong></div>
+      <div class="stat-card"><span>Minimum score</span><strong>{{ activity.reliability.minimum }}</strong></div>
     </div>
-
     <div class="tracking-note premium-note">
-      <strong>Commitment flow</strong>
-      <p>`Interested` lets people follow the plan without taking a seat. `Join` means they are committing to attend. If the activity is full or their score is below the minimum, they go to the waitlist instead of being blocked entirely.</p>
+      <strong>Role coverage</strong>
+      <p>{{ activity.role_summary }}</p>
     </div>
-
     <div class="eta-box gps-panel" data-venue-lat="{{ activity.venue_coords.lat }}" data-venue-lng="{{ activity.venue_coords.lng }}" data-activity-id="{{ activity.id }}">
-      <p class="section-label">Live GPS ETA</p>
-      <h3>Arrival is detected automatically</h3>
-      <p>{{ activity.tracking_mode }}</p>
+      <p class="section-label">Live ETA</p>
       <div class="gps-status">
         <span class="eta-chip gps-chip">{{ activity.viewer_eta }}</span>
-        <button class="secondary-button gps-button" type="button">Enable GPS ETA</button>
+        <button class="secondary-button gps-button" type="button">Share ETA</button>
       </div>
-      <small class="gps-note">ETA is saved to the backend for joined attendees. Browser geolocation still uses straight-line distance.</small>
+      <small class="support-copy">{{ activity.tracking_mode }}</small>
     </div>
   </article>
 
   <article class="card">
-    <p class="section-label">Role coverage</p>
-    <div class="role-column">
+    <p class="section-label">Roles</p>
+    <div class="list-stack">
       {% for role in activity.roles %}
-      <div class="role-card">
+      <div class="list-row">
         <div>
-          <h3>{{ role.name }}</h3>
+          <strong>{{ role.name }}</strong>
           <p>{{ role.type|capitalize }} role</p>
         </div>
-        <strong>{{ role.filled }}/{{ role.needed }}</strong>
+        <span class="signal-badge">{{ role.filled }}/{{ role.needed }}</span>
       </div>
+      {% else %}
+      <div class="empty-inline">No roles added.</div>
       {% endfor %}
     </div>
   </article>
@@ -118,15 +89,12 @@
     <div class="section-header">
       <div>
         <p class="section-label">Attendees</p>
-        <h2>Who is coming</h2>
+        <h2>Confirmed</h2>
       </div>
-      {% if activity.viewer_can_manage %}
-      <a class="text-link" href="{{ url_for('host_dashboard', activity_id=activity.id) }}">Host dashboard</a>
-      {% endif %}
     </div>
-    <div class="attendee-list">
+    <div class="list-stack">
       {% for attendee in activity.attendees %}
-      <div class="attendee-row">
+      <div class="list-row">
         <div>
           <strong>{{ attendee.name }}</strong>
           <p>{{ attendee.role }} • Reliability {{ attendee.reliability }}</p>
@@ -140,19 +108,21 @@
   <article class="card">
     <div class="section-header">
       <div>
-        <p class="section-label">Interested</p>
-        <h2>Watching this activity</h2>
+        <p class="section-label">Watching</p>
+        <h2>Interested</h2>
       </div>
     </div>
-    <div class="attendee-list">
+    <div class="list-stack">
       {% for person in activity.interested_users %}
-      <div class="attendee-row">
+      <div class="list-row">
         <div>
           <strong>{{ person.name }}</strong>
-          <p>Interested only • Reliability {{ person.reliability }}</p>
+          <p>Reliability {{ person.reliability }}</p>
         </div>
-        <span class="eta-chip">Not committed</span>
+        <span class="signal-badge">Interested</span>
       </div>
+      {% else %}
+      <div class="empty-inline">No one is just watching right now.</div>
       {% endfor %}
     </div>
   </article>
@@ -163,25 +133,20 @@
     <div class="section-header">
       <div>
         <p class="section-label">Waitlist</p>
-        <h2>People pending a seat</h2>
+        <h2>Pending access</h2>
       </div>
     </div>
-    <div class="attendee-list">
+    <div class="list-stack">
       {% for person in activity.waitlist %}
-      <div class="attendee-row">
+      <div class="list-row">
         <div>
           <strong>{{ person.name }}</strong>
-          <p>{{ person.reason }} • Reliability {{ person.reliability }}</p>
+          <p>{{ person.reason }}</p>
         </div>
-        <span class="eta-chip">Waitlisted</span>
+        <span class="signal-badge">Waitlist</span>
       </div>
       {% else %}
-      <div class="role-card">
-        <div>
-          <h3>No one is waiting</h3>
-          <p>This activity currently has no waitlist.</p>
-        </div>
-      </div>
+      <div class="empty-inline">No waitlist for this event.</div>
       {% endfor %}
     </div>
   </article>
@@ -189,8 +154,8 @@
   <article class="card">
     <div class="section-header">
       <div>
-        <p class="section-label">Activity chat</p>
-        <h2>Simple conversation for this plan</h2>
+        <p class="section-label">Chat</p>
+        <h2>Activity conversation</h2>
       </div>
     </div>
     <div class="chat-list">
@@ -202,10 +167,12 @@
         </div>
         <p>{{ message.body }}</p>
       </div>
+      {% else %}
+      <div class="empty-inline">No messages yet.</div>
       {% endfor %}
     </div>
     <form class="chat-form" method="post" action="{{ url_for('post_message', activity_id=activity.id) }}">
-      <input type="text" name="body" placeholder="Type a message" maxlength="400">
+      <input type="text" name="body" placeholder="Send a message" maxlength="400">
       <button class="primary-button" type="submit">Send</button>
     </form>
   </article>

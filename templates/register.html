@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}EventMatch | Create account{% endblock %}
+
+{% block content %}
+<section class="auth-shell">
+  <article class="card auth-card">
+    <p class="eyebrow">Create account</p>
+    <h1>Set up your profile</h1>
+    <form class="stack-form" method="post">
+      <label>
+        Display name
+        <input type="text" name="name" value="{{ form_data.name }}" required>
+      </label>
+      <label>
+        Email
+        <input type="email" name="email" value="{{ form_data.email }}" required>
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" required>
+      </label>
+      <label>
+        City
+        <input type="text" name="city" value="{{ form_data.city }}" required>
+      </label>
+      <label>
+        Area / neighborhood
+        <input type="text" name="home_area" value="{{ form_data.home_area }}" required>
+      </label>
+      <button class="primary-button" type="submit">Create account</button>
+    </form>
+    <p class="support-copy">Already registered? <a class="text-link" href="{{ url_for('login') }}">Login</a>.</p>
+  </article>
+</section>
+{% endblock %}
