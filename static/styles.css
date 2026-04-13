@@ -239,6 +239,11 @@ textarea {
   line-height: 1.55;
 }
 
+.lead,
+.support-copy {
+  max-width: 62ch;
+}
+
 .hero-actions,
 .card-actions,
 .detail-actions,
@@ -434,10 +439,51 @@ textarea:focus {
 }
 
 .dashboard-hero {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1.5rem 2rem;
+  align-items: end;
+}
+
+.dashboard-copy,
+.detail-copy {
+  min-width: 0;
+}
+
+.dashboard-copy {
+  max-width: 760px;
+}
+
+.detail-copy {
+  max-width: 840px;
+}
+
+.dashboard-hero h1,
+.detail-header h1 {
+  text-wrap: balance;
+}
+
+.dashboard-hero h1 {
+  max-width: 13ch;
+  font-size: clamp(2.8rem, 5vw, 4.9rem);
+}
+
+.detail-header h1 {
+  max-width: 14ch;
+  font-size: clamp(2.2rem, 4.2vw, 3.9rem);
+}
+
+.quick-actions,
+.detail-actions {
+  justify-content: flex-end;
+}
+
+.quick-actions {
+  align-self: center;
+}
+
+.detail-actions {
+  align-self: start;
 }
 
 .event-list,
@@ -457,6 +503,11 @@ textarea:focus {
 .profile-top {
   display: flex;
   gap: 0.85rem;
+}
+
+.activity-meta {
+  flex-wrap: wrap;
+  row-gap: 0.55rem;
 }
 
 .event-card,
@@ -707,10 +758,15 @@ textarea:focus {
   }
 
   .dashboard-hero,
+  .detail-header,
   .event-card,
   .topbar {
-    flex-direction: column;
     align-items: stretch;
+  }
+
+  .dashboard-hero,
+  .detail-header {
+    grid-template-columns: 1fr;
   }
 
   .event-side {
