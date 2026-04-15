@@ -500,9 +500,14 @@ textarea:focus {
 .event-list,
 .list-stack,
 .role-column,
-.chat-list {
+.chat-list,
+.stacked-badges {
   display: grid;
   gap: 0.85rem;
+}
+
+.stacked-badges {
+  justify-items: end;
 }
 
 .event-card,
@@ -758,9 +763,15 @@ textarea:focus {
   gap: 0.8rem;
 }
 
+.map-preview,
 .map-canvas {
   width: 100%;
-  min-height: 260px;
+  height: 220px;
+}
+
+.map-preview,
+.map-canvas {
+  position: relative;
   border-radius: 22px;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -769,16 +780,30 @@ textarea:focus {
     var(--surface-muted);
 }
 
-.map-canvas.leaflet-container {
-  background: #dce7f2;
+.map-tile-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
 }
 
-.leaflet-container {
-  font: inherit;
+.map-tile {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
-.leaflet-container img {
-  max-width: none;
+.map-pin {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  color: var(--danger);
+  font-size: 2rem;
+  line-height: 1;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .map-canvas-placeholder {

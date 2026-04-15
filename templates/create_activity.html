@@ -44,9 +44,9 @@
         <input type="hidden" name="venue_lng" value="{{ form_data.venue_lng }}" data-location-lng>
       </label>
       <div class="full-span map-field" data-location-picker data-default-lat="{{ form_data.venue_lat }}" data-default-lng="{{ form_data.venue_lng }}">
-        <div class="map-canvas" data-location-map></div>
+        <div class="map-preview" data-location-map-preview></div>
         <div class="map-inline-meta">
-          <p class="compact-copy">Click the map to move the pin, or search once to center it on the typed location.</p>
+          <p class="compact-copy">Search once to center the preview on the typed location.</p>
           <div class="map-inline-actions">
             <button class="secondary-button" type="button" data-location-search>Find on map</button>
             <a class="text-link" href="https://www.openstreetmap.org/search?query={{ form_data.location|urlencode }}" target="_blank" rel="noreferrer">Open in OpenStreetMap</a>

@@ -27,6 +27,10 @@
       <div class="stat-card"><span>Interested</span><strong>{{ activity.interested }}</strong></div>
       <div class="stat-card"><span>Waitlist</span><strong>{{ activity.waitlist_count }}</strong></div>
       <div class="stat-card"><span>Arriving soon</span><strong>{{ activity.eta_summary.arriving_soon }}</strong></div>
+      {% if activity.attendance_review_open %}
+      <div class="stat-card"><span>On time</span><strong>{{ activity.attendance_summary.on_time }}</strong></div>
+      <div class="stat-card"><span>No-show</span><strong>{{ activity.attendance_summary.no_show }}</strong></div>
+      {% endif %}
     </div>
   </article>
 
@@ -172,5 +176,41 @@
     </form>
     {% endfor %}
   </div>
+</section>
+
+<section class="card">
+  <div class="section-header">
+    <div>
+      <p class="section-label">Post-event review</p>
+      <h2>Attendance outcomes</h2>
+    </div>
+  </div>
+  {% if activity.attendance_review_open %}
+  <div class="role-column">
+    {% for attendee in activity.reviewable_attendees %}
+      <form class="role-card manage-card" method="post" action="{{ url_for('record_attendance_outcome', activity_id=activity.id, participation_id=attendee.id) }}">
+        <div>
+          <strong>{{ attendee.name }}</strong>
+          <p>Current reliability {{ attendee.reliability }} • {{ attendee.attendance_label }}</p>
+        </div>
+        <div class="manage-controls">
+          <label class="compact-field">
+            Outcome
+            <select name="attendance_outcome">
+              <option value="on_time" {% if attendee.attendance_outcome == "on_time" %}selected{% endif %}>Arrived on time</option>
+              <option value="late" {% if attendee.attendance_outcome == "late" %}selected{% endif %}>Late</option>
+              <option value="no_show" {% if attendee.attendance_outcome == "no_show" %}selected{% endif %}>Did not attend</option>
+            </select>
+          </label>
+          <button class="secondary-button" type="submit">Save outcome</button>
+        </div>
+      </form>
+    {% else %}
+    <div class="empty-inline">No attendees are eligible for post-event review.</div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-inline">Attendance review unlocks automatically after the event start time.</div>
+  {% endif %}
 </section>
 {% endblock %}

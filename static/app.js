@@ -36,81 +36,6 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return earthRadiusKm * c;
 }
 
-function leafletAvailable() {
-  return Boolean(window.L);
-}
-
-function setMapPlaceholder(node, message) {
-  if (!node) {
-    return;
-  }
-  node.classList.add("map-canvas-placeholder");
-  node.textContent = message;
-}
-
-function clearMapPlaceholder(node) {
-  if (!node) {
-    return;
-  }
-  node.classList.remove("map-canvas-placeholder");
-  node.textContent = "";
-}
-
-function buildPopupContent(title, location) {
-  const wrapper = document.createElement("div");
-  const heading = document.createElement("strong");
-  heading.textContent = title;
-  wrapper.appendChild(heading);
-  if (location) {
-    wrapper.appendChild(document.createElement("br"));
-    wrapper.appendChild(document.createTextNode(location));
-  }
-  return wrapper;
-}
-
-function ensureLeafletMap(node, center, zoom = 14) {
-  if (!leafletAvailable()) {
-    setMapPlaceholder(node, "Map library unavailable.");
-    return null;
-  }
-
-  clearMapPlaceholder(node);
-  if (!node._leafletMap) {
-    node._leafletMap = L.map(node, {
-      scrollWheelZoom: false,
-    }).setView([center.lat, center.lng], zoom);
-
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      maxZoom: 19,
-    }).addTo(node._leafletMap);
-  } else {
-    node._leafletMap.setView([center.lat, center.lng], zoom);
-  }
-
-  setTimeout(() => {
-    node._leafletMap.invalidateSize();
-  }, 0);
-
-  return node._leafletMap;
-}
-
-function setLeafletMarker(node, center, title = "", location = "") {
-  if (!node._leafletMap) {
-    return;
-  }
-
-  if (!node._leafletMarker) {
-    node._leafletMarker = L.marker([center.lat, center.lng]).addTo(node._leafletMap);
-  } else {
-    node._leafletMarker.setLatLng([center.lat, center.lng]);
-  }
-
-  if (title || location) {
-    node._leafletMarker.bindPopup(buildPopupContent(title || "Pinned venue", location));
-  }
-}
-
 function persistEta(activityId, eta, chip) {
   return fetch(`/activities/${activityId}/eta`, {
     method: "POST",
@@ -180,53 +105,6 @@ function initializeGpsPanels() {
   });
 }
 
-function initializeStaticMapCanvases() {
-  document.querySelectorAll("[data-map-canvas]").forEach((node) => {
-    const lat = Number(node.dataset.lat);
-    const lng = Number(node.dataset.lng);
-    const title = node.dataset.title || "Pinned venue";
-    const location = node.dataset.location || "";
-
-    if (Number.isNaN(lat) || Number.isNaN(lng)) {
-      setMapPlaceholder(node, "No location pin available for this event yet.");
-      return;
-    }
-
-    const map = ensureLeafletMap(node, { lat, lng });
-    if (!map) {
-      return;
-    }
-    setLeafletMarker(node, { lat, lng }, title, location);
-  });
-}
-
-function updatePinnedLocation(picker, lat, lng, label) {
-  const form = picker.closest("form");
-  const mapNode = picker.querySelector("[data-location-map]");
-  const latInput = form?.querySelector("[data-location-lat]");
-  const lngInput = form?.querySelector("[data-location-lng]");
-  const input = form?.querySelector("[data-location-input]");
-  const feedback = picker.querySelector("[data-location-feedback]");
-
-  if (!mapNode || !latInput || !lngInput) {
-    return;
-  }
-
-  latInput.value = String(lat);
-  lngInput.value = String(lng);
-  if (feedback) {
-    feedback.textContent = `Pinned coordinates: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-  }
-
-  const map = ensureLeafletMap(mapNode, { lat, lng });
-  if (!map) {
-    return;
-  }
-
-  const popupText = label || input?.value || "Pinned venue";
-  setLeafletMarker(mapNode, { lat, lng }, "Pinned venue", popupText);
-}
-
 async function searchLocationOnce(query) {
   const url = new URL("https://nominatim.openstreetmap.org/search");
   url.searchParams.set("format", "jsonv2");
@@ -249,6 +127,74 @@ async function searchLocationOnce(query) {
   return results[0];
 }
 
+function long2tile(lon, zoom) {
+  return ((lon + 180) / 360) * 2 ** zoom;
+}
+
+function lat2tile(lat, zoom) {
+  const rad = (lat * Math.PI) / 180;
+  return ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * 2 ** zoom;
+}
+
+function renderStaticMapPreview(container, lat, lng) {
+  if (!container || Number.isNaN(lat) || Number.isNaN(lng)) {
+    return;
+  }
+
+  const zoom = 14;
+  const xTile = long2tile(lng, zoom);
+  const yTile = lat2tile(lat, zoom);
+  const baseX = Math.floor(xTile);
+  const baseY = Math.floor(yTile);
+  const fracX = xTile - baseX;
+  const fracY = yTile - baseY;
+  const tileSize = 256;
+
+  container.innerHTML = "";
+
+  const grid = document.createElement("div");
+  grid.className = "map-tile-grid";
+
+  for (let y = -1; y <= 1; y += 1) {
+    for (let x = -1; x <= 1; x += 1) {
+      const tile = document.createElement("img");
+      tile.className = "map-tile";
+      tile.alt = "";
+      tile.loading = "lazy";
+      tile.src = `https://tile.openstreetmap.org/${zoom}/${baseX + x}/${baseY + y}.png`;
+      grid.appendChild(tile);
+    }
+  }
+
+  const pin = document.createElement("div");
+  pin.className = "map-pin";
+  pin.textContent = "●";
+  pin.style.left = `${((fracX + 1) * tileSize / (tileSize * 3)) * 100}%`;
+  pin.style.top = `${((fracY + 1) * tileSize / (tileSize * 3)) * 100}%`;
+
+  container.appendChild(grid);
+  container.appendChild(pin);
+}
+
+function updateLocationPreview(picker, lat, lng) {
+  const form = picker.closest("form");
+  const latInput = form?.querySelector("[data-location-lat]");
+  const lngInput = form?.querySelector("[data-location-lng]");
+  const preview = picker.querySelector("[data-location-map-preview]");
+  const feedback = picker.querySelector("[data-location-feedback]");
+
+  if (!latInput || !lngInput || !preview) {
+    return;
+  }
+
+  latInput.value = String(lat);
+  lngInput.value = String(lng);
+  renderStaticMapPreview(preview, lat, lng);
+  if (feedback) {
+    feedback.textContent = `Pinned coordinates: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  }
+}
+
 function initializeLocationPickers() {
   document.querySelectorAll("[data-location-picker]").forEach((picker) => {
     if (picker.dataset.bound === "true") {
@@ -261,71 +207,58 @@ function initializeLocationPickers() {
     const latInput = form?.querySelector("[data-location-lat]");
     const lngInput = form?.querySelector("[data-location-lng]");
     const searchButton = picker.querySelector("[data-location-search]");
-    const mapNode = picker.querySelector("[data-location-map]");
     const feedback = picker.querySelector("[data-location-feedback]");
 
-    if (!form || !input || !latInput || !lngInput || !mapNode) {
+    if (!form || !input || !latInput || !lngInput || !searchButton) {
       return;
     }
 
     const initialLat = Number(latInput.value || picker.dataset.defaultLat);
     const initialLng = Number(lngInput.value || picker.dataset.defaultLng);
     if (!Number.isNaN(initialLat) && !Number.isNaN(initialLng)) {
-      updatePinnedLocation(picker, initialLat, initialLng, input.value || "Pinned venue");
-    } else {
-      setMapPlaceholder(mapNode, "Map unavailable for this venue.");
+      updateLocationPreview(picker, initialLat, initialLng);
     }
 
-    if (mapNode._leafletMap) {
-      mapNode._leafletMap.on("click", (event) => {
-        updatePinnedLocation(
-          picker,
-          event.latlng.lat,
-          event.latlng.lng,
-          input.value || "Pinned venue",
-        );
-      });
-    }
-
-    if (searchButton) {
-      searchButton.addEventListener("click", async () => {
-        const query = input.value.trim();
-        if (!query) {
-          if (feedback) {
-            feedback.textContent = "Type a location first, then search once.";
-          }
-          return;
-        }
-
-        searchButton.disabled = true;
-        searchButton.textContent = "Searching...";
+    searchButton.addEventListener("click", async () => {
+      const query = input.value.trim();
+      if (!query) {
         if (feedback) {
-          feedback.textContent = "Searching OpenStreetMap...";
+          feedback.textContent = "Type a location first, then search.";
         }
-        try {
-          const result = await searchLocationOnce(query);
-          const lat = Number(result.lat);
-          const lng = Number(result.lon);
-          if (Number.isNaN(lat) || Number.isNaN(lng)) {
-            throw new Error("Search result is missing coordinates");
-          }
-          input.value = result.display_name || input.value;
-          updatePinnedLocation(
-            picker,
-            lat,
-            lng,
-            result.display_name || input.value,
-          );
-        } catch (error) {
-          if (feedback) {
-            feedback.textContent = error.message || "Unable to find that location";
-          }
-        } finally {
-          searchButton.disabled = false;
-          searchButton.textContent = "Find on map";
+        return;
+      }
+
+      searchButton.disabled = true;
+      searchButton.textContent = "Searching...";
+      if (feedback) {
+        feedback.textContent = "Searching OpenStreetMap...";
+      }
+      try {
+        const result = await searchLocationOnce(query);
+        const lat = Number(result.lat);
+        const lng = Number(result.lon);
+        if (Number.isNaN(lat) || Number.isNaN(lng)) {
+          throw new Error("Search result is missing coordinates");
         }
-      });
-    }
+        input.value = result.display_name || input.value;
+        updateLocationPreview(picker, lat, lng);
+      } catch (error) {
+        if (feedback) {
+          feedback.textContent = error.message || "Unable to find that location";
+        }
+      } finally {
+        searchButton.disabled = false;
+        searchButton.textContent = "Find on map";
+      }
+    });
+  });
+}
+
+function initializeStaticMaps() {
+  document.querySelectorAll("[data-static-map]").forEach((container) => {
+    const lat = Number(container.dataset.lat);
+    const lng = Number(container.dataset.lng);
+    renderStaticMapPreview(container, lat, lng);
   });
 }
 
@@ -359,8 +292,8 @@ function initializeDynamicRoles() {
 
 function initializeApp() {
   initializeGpsPanels();
-  initializeStaticMapCanvases();
   initializeLocationPickers();
+  initializeStaticMaps();
   initializeDynamicRoles();
 }
 
