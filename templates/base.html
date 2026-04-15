@@ -24,6 +24,9 @@
           {% if viewer %}
           <a href="{{ url_for('feed') }}">Feed</a>
           <a href="{{ url_for('create_activity') }}">Create</a>
+          <a class="nav-with-badge" href="{{ url_for('friends_page') }}">
+            Friends{% if pending_invite_count or pending_friend_count %}<span class="nav-badge">{{ pending_invite_count + pending_friend_count }}</span>{% endif %}
+          </a>
           <a href="{{ url_for('profile') }}">Profile</a>
           <a class="nav-user" href="{{ url_for('profile') }}">
             {% if viewer.avatar_url %}

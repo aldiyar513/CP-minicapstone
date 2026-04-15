@@ -94,6 +94,39 @@
   </article>
 </section>
 
+{% if activity.viewer_can_invite %}
+<section class="section-block">
+  <article class="card">
+    <div class="section-header">
+      <div>
+        <p class="section-label">Invite friends</p>
+        <h2>Bring someone along</h2>
+      </div>
+    </div>
+    {% if activity.invitable_friends %}
+    <div class="invite-grid">
+      {% for friend in activity.invitable_friends %}
+      <form method="post" action="{{ url_for('invite_friend_to_activity', activity_id=activity.id) }}" class="invite-row">
+        <input type="hidden" name="friend_id" value="{{ friend.id }}">
+        <div class="profile-top">
+          <span class="avatar">{{ friend.initials }}</span>
+          <strong>{{ friend.name }}</strong>
+        </div>
+        <button class="secondary-button" type="submit">Invite</button>
+      </form>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-inline">
+      No friends available to invite. Either all of your friends are already in this event,
+      you've already invited them, or you haven't added any friends yet —
+      <a class="text-link" href="{{ url_for('friends_page') }}">manage friends</a>.
+    </p>
+    {% endif %}
+  </article>
+</section>
+{% endif %}
+
 <section class="detail-grid">
   <article class="card">
     <p class="section-label">Roles</p>

@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block title %}EventMatch | Friends{% endblock %}
+
+{% block content %}
+<div class="friends-page">
+  <section class="page-heading card friends-heading">
+    <p class="eyebrow">Your people</p>
+    <h1>Friends &amp; invites</h1>
+    <p class="lead">Add friends by name or email, accept the people who sent you a request, and respond to event invites here.</p>
+  </section>
+
+  {% if pending_invites %}
+  <section class="section-block">
+    <div class="section-header">
+      <div>
+        <p class="section-label">Event invites</p>
+        <h2>Pending invites for you</h2>
+      </div>
+    </div>
+    <div class="list-stack">
+      {% for invite in pending_invites %}
+      <article class="card list-row">
+        <div>
+          <strong>{{ invite.activity_title }}</strong>
+          <p>{{ invite.activity_date_label }} · {{ invite.activity_time }} · {{ invite.activity_location }}</p>
+          <p class="compact-copy">Invited by {{ invite.inviter_name }}</p>
+        </div>
+        <div class="card-actions">
+          <form method="post" action="{{ url_for('accept_invite', invite_id=invite.id) }}">
+            <button class="primary-button" type="submit">Accept</button>
+          </form>
+          <form method="post" action="{{ url_for('decline_invite', invite_id=invite.id) }}">
+            <button class="secondary-button" type="submit">Decline</button>
+          </form>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <p class="section-label">Send a friend request</p>
+    <h2>Find someone to connect with</h2>
+    <form class="stack-form" method="post" action="{{ url_for('send_friend_request') }}">
+      <label>
+        Name or email
+        <input type="text" name="identifier" placeholder="jane.doe@uni.edu or Jane Doe" required>
+      </label>
+      <div class="form-actions">
+        <button class="primary-button" type="submit">Send request</button>
+      </div>
+    </form>
+  </section>
+
+  {% if incoming %}
+  <section class="section-block">
+    <div class="section-header">
+      <div>
+        <p class="section-label">Waiting on you</p>
+        <h2>Incoming friend requests</h2>
+      </div>
+    </div>
+    <div class="list-stack">
+      {% for request_item in incoming %}
+      <article class="list-row">
+        <div class="profile-top">
+          <span class="avatar">{{ request_item.user_initials }}</span>
+          <div>
+            <strong>{{ request_item.user_name }}</strong>
+            <p>{{ request_item.home_area }}</p>
+          </div>
+        </div>
+        <div class="card-actions">
+          <form method="post" action="{{ url_for('accept_friend_request', friendship_id=request_item.id) }}">
+            <button class="primary-button" type="submit">Accept</button>
+          </form>
+          <form method="post" action="{{ url_for('remove_friend', friendship_id=request_item.id) }}">
+            <button class="secondary-button" type="submit">Decline</button>
+          </form>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if outgoing %}
+  <section class="section-block">
+    <div class="section-header">
+      <div>
+        <p class="section-label">Pending</p>
+        <h2>Requests you sent</h2>
+      </div>
+    </div>
+    <div class="list-stack">
+      {% for request_item in outgoing %}
+      <article class="list-row">
+        <div class="profile-top">
+          <span class="avatar">{{ request_item.user_initials }}</span>
+          <div>
+            <strong>{{ request_item.user_name }}</strong>
+            <p>Waiting for them to accept</p>
+          </div>
+        </div>
+        <form method="post" action="{{ url_for('remove_friend', friendship_id=request_item.id) }}">
+          <button class="secondary-button" type="submit">Cancel request</button>
+        </form>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="section-block">
+    <div class="section-header">
+      <div>
+        <p class="section-label">Your network</p>
+        <h2>Friends</h2>
+      </div>
+    </div>
+    <div class="list-stack">
+      {% for friend in friends_list %}
+      <article class="list-row">
+        <div class="profile-top">
+          <span class="avatar">{{ friend.initials }}</span>
+          <div>
+            <strong>{{ friend.name }}</strong>
+            <p>{{ friend.home_area }} · Reliability {{ friend.reliability }}%</p>
+          </div>
+        </div>
+        <form method="post" action="{{ url_for('remove_friend', friendship_id=friend.friendship_id) }}" onsubmit="return confirm('Remove this friend?');">
+          <button class="secondary-button" type="submit">Remove</button>
+        </form>
+      </article>
+      {% else %}
+      <div class="empty-inline">
+        No friends yet. Send a request above to get started.
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

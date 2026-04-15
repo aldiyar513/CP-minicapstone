@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from functools import wraps
 import os
 from pathlib import Path
@@ -9,7 +9,7 @@ from urllib.parse import quote_plus
 
 from flask import Flask, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import UniqueConstraint, inspect, text
+from sqlalchemy import UniqueConstraint, inspect, or_, text
 from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -182,6 +182,34 @@ class Message(db.Model):
     author = db.relationship("User", back_populates="messages", lazy="joined")
 
 
+class Friendship(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    requester_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    addressee_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="pending")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+    requester = db.relationship("User", foreign_keys=[requester_id], lazy="joined")
+    addressee = db.relationship("User", foreign_keys=[addressee_id], lazy="joined")
+
+    __table_args__ = (UniqueConstraint("requester_id", "addressee_id", name="uq_friendship_pair"),)
+
+
+class Invite(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    activity_id = db.Column(db.Integer, db.ForeignKey("activity.id"), nullable=False)
+    inviter_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    invitee_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="pending")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+    activity = db.relationship("Activity", lazy="joined")
+    inviter = db.relationship("User", foreign_keys=[inviter_id], lazy="joined")
+    invitee = db.relationship("User", foreign_keys=[invitee_id], lazy="joined")
+
+    __table_args__ = (UniqueConstraint("activity_id", "invitee_id", name="uq_invite_activity_invitee"),)
+
+
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__)
     DEFAULT_DB_PATH.parent.mkdir(exist_ok=True)
@@ -226,9 +254,21 @@ def register_routes(app: Flask) -> None:
     @app.context_processor
     def inject_template_state():
         current_user = get_current_user(optional=True)
+        pending_invite_count = (
+            Invite.query.filter_by(invitee_id=current_user.id, status="pending").count()
+            if current_user
+            else 0
+        )
+        pending_friend_count = (
+            Friendship.query.filter_by(addressee_id=current_user.id, status="pending").count()
+            if current_user
+            else 0
+        )
         return {
             "viewer": serialize_user(current_user) if current_user else None,
             "interest_options": INTEREST_OPTIONS,
+            "pending_invite_count": pending_invite_count,
+            "pending_friend_count": pending_friend_count,
         }
 
     @app.get("/healthz")
@@ -692,6 +732,197 @@ def register_routes(app: Flask) -> None:
 
         return render_template("edit_profile.html", form_data=form_data, tracking_options=TRACKING_OPTIONS)
 
+    @app.route("/friends")
+    @login_required
+    def friends_page():
+        current_user = require_current_user()
+
+        friend_rows = Friendship.query.filter(
+            Friendship.status == "accepted",
+            or_(Friendship.requester_id == current_user.id, Friendship.addressee_id == current_user.id),
+        ).all()
+        friends_list = []
+        for row in friend_rows:
+            other = row.addressee if row.requester_id == current_user.id else row.requester
+            friends_list.append(
+                {
+                    "id": other.id,
+                    "friendship_id": row.id,
+                    "name": other.name,
+                    "initials": initials_for_name(other.name),
+                    "home_area": other.home_area,
+                    "reliability": other.reliability_score,
+                }
+            )
+        friends_list.sort(key=lambda item: item["name"].lower())
+        incoming = [
+            {
+                "id": row.id,
+                "user_name": row.requester.name,
+                "user_initials": initials_for_name(row.requester.name),
+                "home_area": row.requester.home_area,
+            }
+            for row in pending_incoming_friend_requests(current_user.id)
+        ]
+        outgoing = [
+            {
+                "id": row.id,
+                "user_name": row.addressee.name,
+                "user_initials": initials_for_name(row.addressee.name),
+            }
+            for row in pending_outgoing_friend_requests(current_user.id)
+        ]
+        pending_invites = [serialize_invite(invite) for invite in pending_invites_for(current_user.id)]
+
+        return render_template(
+            "friends.html",
+            friends_list=friends_list,
+            incoming=incoming,
+            outgoing=outgoing,
+            pending_invites=pending_invites,
+        )
+
+    @app.post("/friends/request")
+    @login_required
+    def send_friend_request():
+        current_user = require_current_user()
+        identifier = request.form.get("identifier", "").strip()
+        if not identifier:
+            flash("Enter a name or email to send a friend request.", "error")
+            return redirect(url_for("friends_page"))
+
+        query = User.query.filter(
+            or_(
+                User.name == identifier,
+                db.func.lower(User.email) == identifier.lower(),
+            )
+        )
+        target = query.first()
+        if target is None:
+            flash("No user found with that name or email.", "error")
+            return redirect(url_for("friends_page"))
+        if target.id == current_user.id:
+            flash("You cannot send a friend request to yourself.", "error")
+            return redirect(url_for("friends_page"))
+
+        existing = find_friendship(current_user.id, target.id)
+        if existing is not None:
+            if existing.status == "accepted":
+                flash(f"You are already friends with {target.name}.", "info")
+            elif existing.requester_id == current_user.id:
+                flash("Your friend request is still pending.", "info")
+            else:
+                flash(f"{target.name} already sent you a friend request — accept it from your friends page.", "info")
+            return redirect(url_for("friends_page"))
+
+        db.session.add(Friendship(requester_id=current_user.id, addressee_id=target.id, status="pending"))
+        db.session.commit()
+        flash(f"Friend request sent to {target.name}.", "success")
+        return redirect(url_for("friends_page"))
+
+    @app.post("/friends/<int:friendship_id>/accept")
+    @login_required
+    def accept_friend_request(friendship_id: int):
+        current_user = require_current_user()
+        friendship = Friendship.query.filter_by(id=friendship_id, addressee_id=current_user.id).first_or_404()
+        if friendship.status != "pending":
+            flash("This friend request is no longer pending.", "info")
+            return redirect(url_for("friends_page"))
+        friendship.status = "accepted"
+        db.session.commit()
+        flash(f"You and {friendship.requester.name} are now friends.", "success")
+        return redirect(url_for("friends_page"))
+
+    @app.post("/friends/<int:friendship_id>/remove")
+    @login_required
+    def remove_friend(friendship_id: int):
+        current_user = require_current_user()
+        friendship = Friendship.query.filter(
+            Friendship.id == friendship_id,
+            or_(Friendship.requester_id == current_user.id, Friendship.addressee_id == current_user.id),
+        ).first_or_404()
+        db.session.delete(friendship)
+        db.session.commit()
+        flash("Friend removed.", "success")
+        return redirect(url_for("friends_page"))
+
+    @app.post("/activities/<int:activity_id>/invite")
+    @login_required
+    def invite_friend_to_activity(activity_id: int):
+        current_user = require_current_user()
+        activity = get_activity_or_404(activity_id)
+
+        viewer_participation = find_participation(activity, current_user.id)
+        if activity.host_id != current_user.id and viewer_participation is None:
+            flash("Join or follow this event before inviting friends.", "error")
+            return redirect(url_for("activity_detail", activity_id=activity.id))
+
+        friend_id_raw = request.form.get("friend_id", "").strip()
+        try:
+            friend_id = int(friend_id_raw)
+        except ValueError:
+            flash("Choose a friend to invite.", "error")
+            return redirect(url_for("activity_detail", activity_id=activity.id))
+
+        if friend_id not in accepted_friend_ids(current_user.id):
+            flash("You can only invite people who are already your friends.", "error")
+            return redirect(url_for("activity_detail", activity_id=activity.id))
+
+        if find_participation(activity, friend_id) is not None:
+            flash("That friend is already part of this event.", "info")
+            return redirect(url_for("activity_detail", activity_id=activity.id))
+
+        existing = Invite.query.filter_by(activity_id=activity.id, invitee_id=friend_id).first()
+        if existing is not None:
+            flash("You already invited that friend to this event.", "info")
+            return redirect(url_for("activity_detail", activity_id=activity.id))
+
+        db.session.add(
+            Invite(
+                activity_id=activity.id,
+                inviter_id=current_user.id,
+                invitee_id=friend_id,
+                status="pending",
+            )
+        )
+        db.session.commit()
+        friend = db.session.get(User, friend_id)
+        flash(f"Invite sent to {friend.name}.", "success")
+        return redirect(url_for("activity_detail", activity_id=activity.id))
+
+    @app.post("/invites/<int:invite_id>/accept")
+    @login_required
+    def accept_invite(invite_id: int):
+        current_user = require_current_user()
+        invite = Invite.query.filter_by(id=invite_id, invitee_id=current_user.id, status="pending").first_or_404()
+        activity = get_activity_or_404(invite.activity_id)
+
+        participation = find_participation(activity, current_user.id)
+        if participation is None:
+            participation = Participation(
+                activity=activity,
+                user=current_user,
+                status="interested",
+                reason=f"Invited by {invite.inviter.name}",
+                eta_label="Not committed",
+                eta_status="on_track",
+            )
+            db.session.add(participation)
+        db.session.delete(invite)
+        db.session.commit()
+        flash(f"You accepted the invite to {activity.title}. Join when you're ready.", "success")
+        return redirect(url_for("activity_detail", activity_id=activity.id))
+
+    @app.post("/invites/<int:invite_id>/decline")
+    @login_required
+    def decline_invite(invite_id: int):
+        current_user = require_current_user()
+        invite = Invite.query.filter_by(id=invite_id, invitee_id=current_user.id, status="pending").first_or_404()
+        db.session.delete(invite)
+        db.session.commit()
+        flash("Invite declined.", "info")
+        return redirect(url_for("friends_page"))
+
     @app.errorhandler(403)
     def forbidden(_error):
         return render_template("forbidden.html"), 403
@@ -990,7 +1221,69 @@ def validate_profile_form(current_user: User, form_data: dict) -> list[str]:
     return errors
 
 
+def find_friendship(user_a_id: int, user_b_id: int) -> Friendship | None:
+    return Friendship.query.filter(
+        or_(
+            db.and_(Friendship.requester_id == user_a_id, Friendship.addressee_id == user_b_id),
+            db.and_(Friendship.requester_id == user_b_id, Friendship.addressee_id == user_a_id),
+        )
+    ).first()
+
+
+def accepted_friend_ids(user_id: int) -> set[int]:
+    rows = Friendship.query.filter(
+        Friendship.status == "accepted",
+        or_(Friendship.requester_id == user_id, Friendship.addressee_id == user_id),
+    ).all()
+    return {row.addressee_id if row.requester_id == user_id else row.requester_id for row in rows}
+
+
+def get_friends(user: User) -> list[User]:
+    friend_ids = accepted_friend_ids(user.id)
+    if not friend_ids:
+        return []
+    return User.query.filter(User.id.in_(friend_ids)).order_by(User.name).all()
+
+
+def pending_incoming_friend_requests(user_id: int) -> list[Friendship]:
+    return (
+        Friendship.query.filter_by(addressee_id=user_id, status="pending")
+        .order_by(Friendship.created_at.desc())
+        .all()
+    )
+
+
+def pending_outgoing_friend_requests(user_id: int) -> list[Friendship]:
+    return (
+        Friendship.query.filter_by(requester_id=user_id, status="pending")
+        .order_by(Friendship.created_at.desc())
+        .all()
+    )
+
+
+def pending_invites_for(user_id: int) -> list[Invite]:
+    return (
+        Invite.query.filter_by(invitee_id=user_id, status="pending")
+        .order_by(Invite.created_at.desc())
+        .all()
+    )
+
+
+def serialize_invite(invite: Invite) -> dict:
+    activity = invite.activity
+    return {
+        "id": invite.id,
+        "activity_id": activity.id,
+        "activity_title": activity.title,
+        "activity_date_label": display_event_date(activity.activity_date),
+        "activity_time": display_time(activity.start_time),
+        "activity_location": activity.location,
+        "inviter_name": invite.inviter.name,
+    }
+
+
 def load_activities() -> list[Activity]:
+    refresh_recurring_activities()
     return (
         Activity.query.options(
             joinedload(Activity.host),
@@ -1004,7 +1297,42 @@ def load_activities() -> list[Activity]:
     )
 
 
+def refresh_recurring_activities() -> None:
+    """Auto-advance any past-due recurring weekly activities to the next valid week.
+
+    When a weekly activity's date has passed, bump it forward by 7 days until it
+    lands on today or later, and reset per-week state (non-host participations,
+    messages, ETAs) so the new week starts fresh.
+    """
+    today = date.today()
+    stale = Activity.query.filter(
+        Activity.recurring_weekly.is_(True),
+        Activity.activity_date < today,
+    ).all()
+    if not stale:
+        return
+
+    for activity in stale:
+        weeks_behind = (today - activity.activity_date).days // 7 + 1
+        activity.activity_date = activity.activity_date + timedelta(days=weeks_behind * 7)
+
+        # Clear per-week state: non-host participations, messages, and invites.
+        for participation in list(activity.participations):
+            if participation.user_id == activity.host_id:
+                participation.eta_label = "At venue"
+                participation.eta_status = "checked_in"
+                participation.reason = "Host"
+            else:
+                db.session.delete(participation)
+        for message in list(activity.messages):
+            db.session.delete(message)
+        Invite.query.filter_by(activity_id=activity.id).delete(synchronize_session=False)
+
+    db.session.commit()
+
+
 def get_activity_or_404(activity_id: int) -> Activity:
+    refresh_recurring_activities()
     activity = (
         Activity.query.options(
             joinedload(Activity.host),
@@ -1252,9 +1580,34 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
         "viewer_eta": viewer_participation.eta_label if viewer_participation else "Join to share ETA",
         "viewer_can_manage": activity.host_id == current_user.id,
         "viewer_is_host": activity.host_id == current_user.id,
+        "viewer_can_invite": activity.host_id == current_user.id or viewer_participation is not None,
+        "invitable_friends": _invitable_friends_for(activity, current_user),
         "is_weekly": activity.recurring_weekly,
         "recurrence_label": "Weekly circle" if activity.recurring_weekly else "One-time plan",
     }
+
+
+def _invitable_friends_for(activity: Activity, current_user: User) -> list[dict]:
+    friend_ids = accepted_friend_ids(current_user.id)
+    if not friend_ids:
+        return []
+    already_in_activity = {participation.user_id for participation in activity.participations}
+    already_invited = {
+        invite.invitee_id
+        for invite in Invite.query.filter_by(activity_id=activity.id, status="pending").all()
+    }
+    candidate_ids = friend_ids - already_in_activity - already_invited
+    if not candidate_ids:
+        return []
+    friends = User.query.filter(User.id.in_(candidate_ids)).order_by(User.name).all()
+    return [
+        {
+            "id": friend.id,
+            "name": friend.name,
+            "initials": initials_for_name(friend.name),
+        }
+        for friend in friends
+    ]
 
 
 def serialize_activity_summary(activity: Activity) -> dict:
