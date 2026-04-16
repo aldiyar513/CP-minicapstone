@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, time, timedelta
 from pathlib import Path
 import sys
 
@@ -104,6 +104,40 @@ def client(tmp_path):
         )
         db.session.add(waitlisted)
         db.session.add(Message(activity=weekly, author=ari, body="Bring water and resistance bands."))
+
+        retro = Activity(
+            title="Retro Study Debrief",
+            category="Study",
+            activity_date=date.today() - timedelta(days=1),
+            start_time=time.fromisoformat("17:00"),
+            location="South Campus",
+            description="Past session used to review attendance outcomes.",
+            capacity=4,
+            min_reliability=65,
+            host=maya,
+        )
+        db.session.add(retro)
+        db.session.flush()
+        db.session.add(
+            Participation(
+                activity=retro,
+                user=maya,
+                status="joined",
+                reason="Host",
+                eta_label="At venue",
+                eta_status="checked_in",
+            )
+        )
+        db.session.add(
+            Participation(
+                activity=retro,
+                user=ari,
+                status="joined",
+                reason="Confirmed",
+                eta_label="ETA hidden",
+                eta_status="on_track",
+            )
+        )
         db.session.commit()
 
     with app.test_client() as test_client:
@@ -308,3 +342,47 @@ def test_host_can_edit_and_delete_activity(client):
 
     with app.app_context():
         assert db.session.get(Activity, activity_id) is None
+
+
+def test_host_can_record_attendance_and_reliability_updates(client):
+    test_client, app = client
+    login(test_client, email="maya@example.com")
+
+    with app.app_context():
+        activity = Activity.query.filter_by(title="Retro Study Debrief").first()
+        participation = Participation.query.filter_by(activity_id=activity.id).join(User).filter(User.email == "ari@example.com").first()
+        participant_id = participation.id
+
+    response = test_client.post(
+        f"/activities/{activity.id}/host/attendance/{participant_id}",
+        data={"attendance_outcome": "late"},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert b"Attendance outcome saved" in response.data
+
+    with app.app_context():
+        updated = db.session.get(Participation, participant_id)
+        ari = User.query.filter_by(email="ari@example.com").first()
+        assert updated.attendance_outcome == "late"
+        assert ari.reliability_score == 77
+
+
+def test_calendar_export_is_available_from_event_page(client):
+    test_client, app = client
+    login(test_client, email="maya@example.com")
+
+    with app.app_context():
+        activity = Activity.query.filter_by(title="Calculus Sprint").first()
+
+    page = test_client.get(f"/activities/{activity.id}")
+    assert page.status_code == 200
+    assert b"Add to Google Calendar" in page.data
+    assert b"Download .ics" in page.data
+
+    calendar_response = test_client.get(f"/activities/{activity.id}/calendar.ics")
+    assert calendar_response.status_code == 200
+    assert "text/calendar" in calendar_response.headers["Content-Type"]
+    assert b"BEGIN:VCALENDAR" in calendar_response.data
+    assert b"SUMMARY:Calculus Sprint" in calendar_response.data

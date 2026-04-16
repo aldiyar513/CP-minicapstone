@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from flask import Flask, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import UniqueConstraint, inspect, or_, text
 from sqlalchemy.orm import joinedload
@@ -20,8 +20,12 @@ DEFAULT_TRACKING_MODE = "GPS ETA is shared only for confirmed attendees."
 DEFAULT_BIO = "Add a short intro so people know what kind of plans you actually enjoy."
 DEFAULT_TRACKING_OPTION = "Visible only after I join"
 DEFAULT_RELIABILITY_SCORE = 80
+DEFAULT_EVENT_DURATION_MINUTES = 120
 DEFAULT_VENUE_COORDS = {"lat": -34.6037, "lng": -58.3816}
 VALID_ETA_STATES = {"checked_in", "arriving_soon", "on_track", "delayed"}
+ATTENDANCE_OUTCOMES = {"pending", "on_time", "late", "no_show"}
+ATTENDANCE_SCORE_MAP = {"on_time": 100, "late": 65, "no_show": 20}
+RELIABILITY_BASELINE_EVENTS = 4
 STATUS_PRIORITY = {"joined": 0, "interested": 1, "waitlist": 2}
 CATEGORIES = [
     "Workout",
@@ -162,6 +166,8 @@ class Participation(db.Model):
     assigned_role_id = db.Column(db.Integer, db.ForeignKey("role.id"), nullable=True)
     eta_label = db.Column(db.String(80), nullable=False, default="ETA hidden")
     eta_status = db.Column(db.String(20), nullable=False, default="on_track")
+    attendance_outcome = db.Column(db.String(20), nullable=False, default="pending")
+    attendance_recorded_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
     activity = db.relationship("Activity", back_populates="participations", lazy="joined")
@@ -248,6 +254,13 @@ def ensure_schema() -> None:
         with db.engine.begin() as connection:
             if "recurring_weekly" not in activity_columns:
                 connection.execute(text("ALTER TABLE activity ADD COLUMN recurring_weekly BOOLEAN DEFAULT 0"))
+    if "participation" in tables:
+        participation_columns = {column["name"] for column in inspector.get_columns("participation")}
+        with db.engine.begin() as connection:
+            if "attendance_outcome" not in participation_columns:
+                connection.execute(text("ALTER TABLE participation ADD COLUMN attendance_outcome VARCHAR(20) DEFAULT 'pending'"))
+            if "attendance_recorded_at" not in participation_columns:
+                connection.execute(text("ALTER TABLE participation ADD COLUMN attendance_recorded_at DATETIME"))
 
 
 def register_routes(app: Flask) -> None:
@@ -514,6 +527,17 @@ def register_routes(app: Flask) -> None:
         activity = get_activity_or_404(activity_id)
         return render_template("activity_detail.html", activity=serialize_activity(activity, current_user))
 
+    @app.get("/activities/<int:activity_id>/calendar.ics")
+    @login_required
+    def download_calendar_invite(activity_id: int):
+        activity = get_activity_or_404(activity_id)
+        current_user = require_current_user()
+        ics_body = build_ics_invite(activity)
+        response = Response(ics_body, mimetype="text/calendar; charset=utf-8")
+        response.headers["Content-Disposition"] = f'attachment; filename="eventmatch-{activity.id}.ics"'
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.post("/activities/<int:activity_id>/join")
     @login_required
     def join_activity(activity_id: int):
@@ -612,6 +636,37 @@ def register_routes(app: Flask) -> None:
         require_host_access(activity, current_user)
         return render_template("host_dashboard.html", activity=serialize_activity(activity, current_user))
 
+    @app.post("/activities/<int:activity_id>/host/attendance/<int:participation_id>")
+    @login_required
+    def record_attendance_outcome(activity_id: int, participation_id: int):
+        current_user = require_current_user()
+        activity = get_activity_or_404(activity_id)
+        require_host_access(activity, current_user)
+
+        if not attendance_review_open(activity):
+            flash("Attendance review opens once the event start time has passed.", "warning")
+            return redirect(url_for("host_dashboard", activity_id=activity.id))
+
+        participation = Participation.query.filter_by(id=participation_id, activity_id=activity.id).first_or_404()
+        if participation.status != "joined":
+            flash("Only confirmed attendees can receive an attendance outcome.", "error")
+            return redirect(url_for("host_dashboard", activity_id=activity.id))
+        if participation.user_id == activity.host_id:
+            flash("The host seat is not reviewed from this control.", "info")
+            return redirect(url_for("host_dashboard", activity_id=activity.id))
+
+        outcome = request.form.get("attendance_outcome", "").strip()
+        if outcome not in ATTENDANCE_OUTCOMES or outcome == "pending":
+            flash("Choose a valid attendance outcome.", "error")
+            return redirect(url_for("host_dashboard", activity_id=activity.id))
+
+        participation.attendance_outcome = outcome
+        participation.attendance_recorded_at = utcnow()
+        recalculate_reliability(participation.user)
+        db.session.commit()
+        flash("Attendance outcome saved and reliability updated.", "success")
+        return redirect(url_for("host_dashboard", activity_id=activity.id))
+
     @app.post("/activities/<int:activity_id>/host/participants/<int:participation_id>")
     @login_required
     def update_participant(activity_id: int, participation_id: int):
@@ -624,11 +679,14 @@ def register_routes(app: Flask) -> None:
         assigned_role_id = request.form.get("assigned_role_id", "").strip()
 
         if new_status == "remove":
+            had_scored_attendance = participation.attendance_outcome in ATTENDANCE_SCORE_MAP
             if participation.user_id == current_user.id:
                 flash("The host seat cannot be removed.", "error")
                 return redirect(url_for("host_dashboard", activity_id=activity.id))
             db.session.delete(participation)
             db.session.flush()
+            if had_scored_attendance:
+                recalculate_reliability(participation.user)
             promote_waitlist(activity)
             db.session.commit()
             flash("Participant removed.", "success")
@@ -651,27 +709,32 @@ def register_routes(app: Flask) -> None:
             if not can_confirm_join(activity, participation, host_override=True):
                 participation.status = "waitlist"
                 participation.reason = "Event is already at capacity."
+                clear_attendance_outcome(participation)
                 flash("No seats left. The participant stays on the waitlist.", "warning")
             else:
                 participation.status = "joined"
                 participation.reason = "Confirmed by host"
                 if participation.eta_label == "Not committed":
                     participation.eta_label = "ETA hidden"
+                clear_attendance_outcome(participation)
                 flash("Participant confirmed.", "success")
         elif new_status == "interested":
             participation.status = "interested"
             participation.reason = "Moved to interested by host"
             participation.eta_label = "Not committed"
             participation.eta_status = "on_track"
+            clear_attendance_outcome(participation)
             flash("Participant moved to interested.", "success")
         else:
             participation.status = "waitlist"
             participation.reason = "Pending host review"
             participation.eta_label = "Waitlisted"
             participation.eta_status = "delayed"
+            clear_attendance_outcome(participation)
             flash("Participant moved to the waitlist.", "success")
 
         promote_waitlist(activity)
+        recalculate_reliability(participation.user)
         db.session.commit()
         return redirect(url_for("host_dashboard", activity_id=activity.id))
 
@@ -1436,6 +1499,7 @@ def apply_join_request(activity: Activity, participation: Participation) -> tupl
     if can_confirm_join(activity, participation):
         participation.status = "joined"
         participation.reason = "Confirmed"
+        clear_attendance_outcome(participation)
         if participation.eta_label in {"Not committed", "Waitlisted"}:
             participation.eta_label = "ETA hidden"
             participation.eta_status = "on_track"
@@ -1444,6 +1508,7 @@ def apply_join_request(activity: Activity, participation: Participation) -> tupl
     participation.status = "waitlist"
     participation.reason = waitlist_reason(activity, participation)
     participation.assigned_role = None
+    clear_attendance_outcome(participation)
     participation.eta_label = "Waitlisted"
     participation.eta_status = "delayed"
     return "waitlist", participation.reason
@@ -1458,9 +1523,101 @@ def promote_waitlist(activity: Activity) -> None:
         if can_confirm_join(activity, participation):
             participation.status = "joined"
             participation.reason = "Promoted from waitlist"
+            clear_attendance_outcome(participation)
             if participation.eta_label == "Waitlisted":
                 participation.eta_label = "ETA hidden"
                 participation.eta_status = "on_track"
+
+
+def clear_attendance_outcome(participation: Participation) -> None:
+    participation.attendance_outcome = "pending"
+    participation.attendance_recorded_at = None
+
+
+def attendance_review_open(activity: Activity) -> bool:
+    return datetime.now() >= event_start_datetime(activity)
+
+
+def event_start_datetime(activity: Activity) -> datetime:
+    return datetime.combine(activity.activity_date, activity.start_time)
+
+
+def event_end_datetime(activity: Activity) -> datetime:
+    return event_start_datetime(activity) + timedelta(minutes=DEFAULT_EVENT_DURATION_MINUTES)
+
+
+def recalculate_reliability(user: User) -> None:
+    scored = (
+        Participation.query.join(Activity)
+        .filter(
+            Participation.user_id == user.id,
+            Participation.status == "joined",
+            Participation.attendance_outcome.in_(tuple(ATTENDANCE_SCORE_MAP)),
+            Activity.host_id != user.id,
+        )
+        .order_by(Activity.activity_date.desc(), Activity.start_time.desc())
+        .all()
+    )
+    if not scored:
+        user.reliability_score = DEFAULT_RELIABILITY_SCORE
+        return
+
+    baseline_total = DEFAULT_RELIABILITY_SCORE * RELIABILITY_BASELINE_EVENTS
+    total = baseline_total + sum(ATTENDANCE_SCORE_MAP[item.attendance_outcome] for item in scored)
+    divisor = RELIABILITY_BASELINE_EVENTS + len(scored)
+    user.reliability_score = max(20, min(100, round(total / divisor)))
+
+
+def attendance_outcome_label(outcome: str) -> str:
+    return {
+        "pending": "Pending review",
+        "on_time": "Arrived on time",
+        "late": "Late",
+        "no_show": "Did not attend",
+    }.get(outcome, "Pending review")
+
+
+def event_datetime_for_calendar(value: datetime) -> str:
+    return value.strftime("%Y%m%dT%H%M%S")
+
+
+def build_google_calendar_url(activity: Activity) -> str:
+    start = event_datetime_for_calendar(event_start_datetime(activity))
+    end = event_datetime_for_calendar(event_end_datetime(activity))
+    details = quote_plus(f"{activity.description}\n\nOpen the activity in EventMatch.")
+    location = quote_plus(activity.location)
+    text = quote_plus(activity.title)
+    return (
+        "https://calendar.google.com/calendar/render?action=TEMPLATE"
+        f"&text={text}&dates={start}/{end}&details={details}&location={location}"
+    )
+
+
+def escape_ics_text(value: str) -> str:
+    return value.replace("\\", "\\\\").replace(";", r"\;").replace(",", r"\,").replace("\n", r"\n")
+
+
+def build_ics_invite(activity: Activity) -> str:
+    start = event_datetime_for_calendar(event_start_datetime(activity))
+    end = event_datetime_for_calendar(event_end_datetime(activity))
+    stamp = event_datetime_for_calendar(utcnow())
+    uid = f"eventmatch-{activity.id}@local"
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//EventMatch//EN",
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        f"DTSTAMP:{stamp}",
+        f"DTSTART:{start}",
+        f"DTEND:{end}",
+        f"SUMMARY:{escape_ics_text(activity.title)}",
+        f"DESCRIPTION:{escape_ics_text(activity.description)}",
+        f"LOCATION:{escape_ics_text(activity.location)}",
+        "END:VEVENT",
+        "END:VCALENDAR",
+    ]
+    return "\r\n".join(lines) + "\r\n"
 
 
 def serialize_user(user: User) -> dict:
@@ -1491,6 +1648,7 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
     interested = [item for item in activity.participations if item.status == "interested"]
     waitlist = [item for item in activity.participations if item.status == "waitlist"]
     viewer_participation = find_participation(activity, current_user.id)
+    review_open = attendance_review_open(activity)
 
     roles = [
         {
@@ -1504,10 +1662,13 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
     ]
 
     eta_summary = {"arriving_soon": 0, "on_track": 0, "delayed": 0}
+    attendance_summary = {"on_time": 0, "late": 0, "no_show": 0}
     attendees = []
     for participation in sorted(joined, key=lambda item: (0 if item.user_id == activity.host_id else 1, item.user.name.lower())):
         if participation.eta_status in eta_summary:
             eta_summary[participation.eta_status] += 1
+        if participation.attendance_outcome in attendance_summary:
+            attendance_summary[participation.attendance_outcome] += 1
         attendees.append(
             {
                 "id": participation.id,
@@ -1517,6 +1678,9 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
                 "status": participation.eta_status,
                 "reliability": reliability_label(participation.user.reliability_score),
                 "assigned_role_id": participation.assigned_role_id or "",
+                "attendance_outcome": participation.attendance_outcome,
+                "attendance_label": attendance_outcome_label(participation.attendance_outcome),
+                "can_review_attendance": review_open and participation.user_id != activity.host_id,
             }
         )
 
@@ -1533,6 +1697,8 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
         "host": activity.host.name,
         "description": activity.description,
         "summary": truncate(activity.description, 140),
+        "calendar_google_url": build_google_calendar_url(activity),
+        "calendar_ics_url": url_for("download_calendar_invite", activity_id=activity.id),
         "capacity": activity.capacity,
         "joined": len(joined),
         "interested": len(interested),
@@ -1540,6 +1706,8 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
         "spots_left": max(activity.capacity - len(joined), 0),
         "venue_coords": {"lat": activity.venue_lat, "lng": activity.venue_lng},
         "tracking_mode": activity.tracking_mode,
+        "attendance_review_open": review_open,
+        "attendance_summary": attendance_summary,
         "reliability": {
             "minimum": reliability_label(activity.min_reliability),
             "note": reliability_note(activity.min_reliability),
@@ -1549,6 +1717,7 @@ def serialize_activity(activity: Activity, current_user: User) -> dict:
         "roles": roles,
         "role_summary": role_summary(roles),
         "attendees": attendees,
+        "reviewable_attendees": [item for item in attendees if item["can_review_attendance"]],
         "interested_users": [
             {
                 "id": item.id,
@@ -1690,6 +1859,17 @@ def display_time(value: time) -> str:
 
 def openstreetmap_search_url(query: str) -> str:
     return f"https://www.openstreetmap.org/search?query={quote_plus(query)}"
+
+
+def openstreetmap_embed_url(lat: float, lng: float, *, padding: float = 0.01) -> str:
+    west = lng - padding
+    south = lat - padding
+    east = lng + padding
+    north = lat + padding
+    return (
+        "https://www.openstreetmap.org/export/embed.html"
+        f"?bbox={west}%2C{south}%2C{east}%2C{north}&layer=mapnik&marker={lat}%2C{lng}"
+    )
 
 
 def display_chat_time(value: datetime) -> str:
