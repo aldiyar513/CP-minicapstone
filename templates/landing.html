@@ -5,54 +5,52 @@
 {% block content %}
 <section class="landing-hero">
   <div class="landing-copy">
-    <p class="eyebrow">Commercial landing</p>
-    <h1>Run local events, recurring circles, and small-group plans without the chaos.</h1>
+    <p class="eyebrow">EventMatch</p>
+    <h1>Plans that actually happen.</h1>
     <p class="lead">
-      EventMatch keeps scheduling, role coverage, attendance, and lightweight chat in one place so communities,
-      clubs, gyms, and city groups can coordinate faster.
+      Post a plan, fill roles, track attendance — all in one place.
     </p>
     <div class="hero-actions">
-      <a class="primary-button" href="{{ url_for('register') }}">Start your community</a>
-      <a class="secondary-button" href="{{ url_for('login') }}">Open the app</a>
+      <a class="primary-button" href="{{ url_for('register') }}">Get started</a>
+      <a class="secondary-button" href="{{ url_for('login') }}">Log in</a>
     </div>
     <div class="signal-row">
       <span>Weekly circles</span>
       <span>Role coverage</span>
-      <span>Compact event feed</span>
-      <span>Shared event chat</span>
+      <span>Live ETA</span>
     </div>
   </div>
   <aside class="landing-panel card">
     <div class="metric">
-      <strong>Weekly events</strong>
-      <span>Great for gym partners, study groups, and repeat meetups.</span>
+      <strong>Weekly circles</strong>
+      <span>For gym, study, or repeat meetups.</span>
     </div>
     <div class="metric">
-      <strong>Editable profiles</strong>
-      <span>People can manage interests, city, bio, and profile picture.</span>
+      <strong>Friends &amp; invites</strong>
+      <span>Add friends and invite them to any event.</span>
     </div>
     <div class="metric">
-      <strong>Actual attendance state</strong>
-      <span>Hosts can see joined, interested, waitlisted, and ETA status in one dashboard.</span>
+      <strong>Reliability scores</strong>
+      <span>Filter out no-shows before they join.</span>
     </div>
   </aside>
 </section>
 
 <section class="landing-grid">
   <article class="card feature-card">
-    <p class="section-label">For city communities</p>
-    <h2>People discover the right plan faster.</h2>
-    <p>No oversized cards, no placeholder feed, no fake activity wall. Just clear event summaries and clean actions.</p>
+    <p class="section-label">Discover</p>
+    <h2>Find plans fast.</h2>
+    <p>Clean feed, category and date filters, no clutter.</p>
   </article>
   <article class="card feature-card">
-    <p class="section-label">For hosts</p>
-    <h2>Recurring events stay visible.</h2>
-    <p>Weekly circles sit in their own section so ongoing gym, study, or networking groups do not get buried.</p>
+    <p class="section-label">Host</p>
+    <h2>Recurring events stay fresh.</h2>
+    <p>Weekly circles regenerate automatically each week.</p>
   </article>
   <article class="card feature-card">
-    <p class="section-label">For members</p>
-    <h2>Profiles are editable.</h2>
-    <p>Users can sign in, edit profile details, choose interests, add a profile photo URL, and manage their account.</p>
+    <p class="section-label">Coordinate</p>
+    <h2>Roles, chat, ETA.</h2>
+    <p>Everything a group needs to actually show up.</p>
   </article>
 </section>
 {% endblock %}

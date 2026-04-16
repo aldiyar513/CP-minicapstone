@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: event-match
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: WEB_CONCURRENCY
+        value: "2"
