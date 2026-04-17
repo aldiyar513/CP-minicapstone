@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
 from functools import wraps
+import math
 import os
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -12,10 +13,15 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import UniqueConstraint, inspect, or_, text
 from sqlalchemy.orm import joinedload
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
+import secrets
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = BASE_DIR / "instance" / "eventmatch.db"
+AVATAR_UPLOAD_DIR = BASE_DIR / "static" / "uploads" / "avatars"
+ALLOWED_AVATAR_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+MAX_AVATAR_BYTES = 4 * 1024 * 1024
 DEFAULT_TRACKING_MODE = "GPS ETA is shared only for confirmed attendees."
 DEFAULT_BIO = "Add a short intro so people know what kind of plans you actually enjoy."
 DEFAULT_TRACKING_OPTION = "Visible only after I join"
@@ -82,6 +88,39 @@ def get_database_uri() -> str:
 
 def utcnow() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def eta_snapshot_for_distance(distance_km: float) -> tuple[str, str]:
+    distance = max(distance_km, 0.0)
+    if distance < 0.15:
+        return "checked_in", "At venue"
+
+    if distance < 1.5:
+        speed_kmh = 9
+        buffer_minutes = 2
+    elif distance < 6:
+        speed_kmh = 18
+        buffer_minutes = 4
+    else:
+        speed_kmh = 28
+        buffer_minutes = 6
+
+    minutes_away = max(3, math.ceil((distance / speed_kmh) * 60 + buffer_minutes))
+    if minutes_away <= 8:
+        status = "arriving_soon"
+        prefix = "Arriving soon"
+    elif minutes_away <= 25:
+        status = "on_track"
+        prefix = "On track"
+    else:
+        status = "delayed"
+        prefix = "Delayed"
+
+    if distance < 1:
+        distance_label = f"{round(distance * 1000):.0f} m"
+    else:
+        distance_label = f"{distance:.1f} km"
+    return status, f"{prefix} • {minutes_away} min away ({distance_label})"
 
 
 class User(db.Model):
@@ -219,6 +258,7 @@ class Invite(db.Model):
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__)
     DEFAULT_DB_PATH.parent.mkdir(exist_ok=True)
+    AVATAR_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     app.config.from_mapping(
         SECRET_KEY=os.getenv("SECRET_KEY", "dev-secret-key"),
         SQLALCHEMY_DATABASE_URI=get_database_uri(),
@@ -440,8 +480,8 @@ def register_routes(app: Flask) -> None:
                     user=current_user,
                     status="joined",
                     reason="Host",
-                    eta_label="At venue",
-                    eta_status="checked_in",
+                    eta_label="ETA hidden",
+                    eta_status="on_track",
                 )
             )
             db.session.commit()
@@ -618,10 +658,20 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": "Join the event before sharing ETA."}), 400
 
         payload = request.get_json(silent=True) or {}
-        eta_status = str(payload.get("eta_status", "")).strip()
-        eta_label = str(payload.get("eta_label", "")).strip()
-        if eta_status not in VALID_ETA_STATES or not eta_label:
-            return jsonify({"error": "Invalid ETA payload."}), 400
+        distance_km_raw = payload.get("distance_km")
+        if distance_km_raw is not None:
+            try:
+                distance_km = float(distance_km_raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Invalid ETA payload."}), 400
+            if not math.isfinite(distance_km):
+                return jsonify({"error": "Invalid ETA payload."}), 400
+            eta_status, eta_label = eta_snapshot_for_distance(distance_km)
+        else:
+            eta_status = str(payload.get("eta_status", "")).strip()
+            eta_label = str(payload.get("eta_label", "")).strip()
+            if eta_status not in VALID_ETA_STATES or not eta_label:
+                return jsonify({"error": "Invalid ETA payload."}), 400
 
         participation.eta_status = eta_status
         participation.eta_label = eta_label[:80]
@@ -776,6 +826,13 @@ def register_routes(app: Flask) -> None:
         if request.method == "POST":
             form_data = extract_profile_form(request.form, current_user)
             errors = validate_profile_form(current_user, form_data)
+
+            uploaded_file = request.files.get("avatar_file")
+            saved_upload_path: str | None = None
+            if uploaded_file and uploaded_file.filename:
+                saved_upload_path, upload_errors = save_avatar_upload(uploaded_file, current_user)
+                errors.extend(upload_errors)
+
             if errors:
                 for error in errors:
                     flash(error, "error")
@@ -786,7 +843,7 @@ def register_routes(app: Flask) -> None:
             current_user.city = form_data["city"]
             current_user.home_area = form_data["home_area"]
             current_user.bio = form_data["bio"]
-            current_user.avatar_url = form_data["avatar_url"]
+            current_user.avatar_url = saved_upload_path if saved_upload_path else form_data["avatar_url"]
             current_user.gps_tracking = form_data["gps_tracking"]
             current_user.interests_csv = "|".join(form_data["interests"])
             db.session.commit()
@@ -1256,6 +1313,27 @@ def extract_profile_form(form, current_user: User) -> dict:
         "interests": deduped,
         "custom_interests": form.get("custom_interests", "").strip(),
     }
+
+
+def save_avatar_upload(uploaded_file, user: User) -> tuple[str | None, list[str]]:
+    filename = secure_filename(uploaded_file.filename or "")
+    if not filename or "." not in filename:
+        return None, ["Upload a valid image file (png, jpg, gif, or webp)."]
+    extension = filename.rsplit(".", 1)[-1].lower()
+    if extension not in ALLOWED_AVATAR_EXTENSIONS:
+        return None, ["Profile photo must be a png, jpg, gif, or webp image."]
+    uploaded_file.stream.seek(0, os.SEEK_END)
+    size = uploaded_file.stream.tell()
+    uploaded_file.stream.seek(0)
+    if size > MAX_AVATAR_BYTES:
+        return None, ["Profile photo must be 4 MB or smaller."]
+    if size == 0:
+        return None, ["Uploaded file is empty."]
+    unique_suffix = secrets.token_hex(6)
+    stored_name = f"user_{user.id}_{unique_suffix}.{extension}"
+    destination = AVATAR_UPLOAD_DIR / stored_name
+    uploaded_file.save(destination)
+    return url_for("static", filename=f"uploads/avatars/{stored_name}"), []
 
 
 def validate_profile_form(current_user: User, form_data: dict) -> list[str]:

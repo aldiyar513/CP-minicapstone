@@ -1,28 +1,3 @@
-function formatEtaState(distanceKm) {
-  if (distanceKm < 0.2) {
-    return { status: "checked_in", label: "At venue" };
-  }
-  if (distanceKm < 2) {
-    return { status: "arriving_soon", label: "About 3-6 min away" };
-  }
-  if (distanceKm < 5) {
-    return { status: "on_track", label: "About 8-15 min away" };
-  }
-  return { status: "delayed", label: "More than 15 min away" };
-}
-
-function formatEtaMessage(distanceKm) {
-  const eta = formatEtaState(distanceKm);
-  const prefix = eta.status === "checked_in"
-    ? "At venue"
-    : eta.status === "arriving_soon"
-      ? "Arriving soon"
-      : eta.status === "on_track"
-        ? "On track"
-        : "Delayed";
-  return { status: eta.status, text: `${prefix} • ${eta.label}` };
-}
-
 function haversineKm(lat1, lon1, lat2, lon2) {
   const toRad = (value) => (value * Math.PI) / 180;
   const earthRadiusKm = 6371;
@@ -36,20 +11,20 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return earthRadiusKm * c;
 }
 
-function persistEta(activityId, eta, chip) {
+function persistEta(activityId, distanceKm, chip) {
   return fetch(`/activities/${activityId}/eta`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      eta_status: eta.status,
-      eta_label: eta.text,
+      distance_km: distanceKm,
     }),
   }).then(async (response) => {
+    const payload = await response.json();
     if (!response.ok) {
-      const payload = await response.json();
       throw new Error(payload.error || "Unable to save ETA");
     }
-    chip.className = `eta-chip gps-chip status-${eta.status}`;
+    chip.className = `eta-chip gps-chip status-${payload.eta_status}`;
+    chip.textContent = payload.eta_label;
   });
 }
 
@@ -95,9 +70,8 @@ function initializeGpsPanels() {
           venueLat,
           venueLng,
         );
-        const eta = formatEtaMessage(distanceKm);
-        chip.textContent = eta.text;
-        await persistEta(activityId, eta, chip);
+        chip.textContent = "Saving ETA...";
+        await persistEta(activityId, distanceKm, chip);
       } catch (error) {
         chip.textContent = error.message || "Unable to update ETA";
       }
@@ -284,8 +258,16 @@ function initializeDynamicRoles() {
           <option>Optional</option>
         </select>
         <input type="number" name="role_needed" min="1" value="1" aria-label="needed count">
+        <button type="button" class="role-remove" data-remove-role aria-label="Remove role">×</button>
       `;
       rowsContainer.appendChild(row);
+    });
+
+    rowsContainer.addEventListener("click", (event) => {
+      const target = event.target.closest("[data-remove-role]");
+      if (!target) return;
+      const row = target.closest("[data-role-row]");
+      if (row) row.remove();
     });
   });
 }

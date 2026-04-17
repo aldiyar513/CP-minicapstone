@@ -259,9 +259,13 @@ def test_interest_join_leave_and_eta_flow(client):
 
     eta_response = test_client.post(
         f"/activities/{activity.id}/eta",
-        json={"eta_status": "arriving_soon", "eta_label": "Arriving soon • About 3-6 min away"},
+        json={"distance_km": 0.8},
     )
     assert eta_response.status_code == 200
+    payload = eta_response.get_json()
+    assert payload["eta_status"] == "arriving_soon"
+    assert "min away" in payload["eta_label"]
+    assert "800 m" in payload["eta_label"]
 
     leave_response = test_client.post(f"/activities/{activity.id}/leave", follow_redirects=True)
     assert leave_response.status_code == 200
@@ -270,6 +274,35 @@ def test_interest_join_leave_and_eta_flow(client):
         ari = User.query.filter_by(email="ari@example.com").first()
         participation = Participation.query.filter_by(activity_id=activity.id, user_id=ari.id).first()
         assert participation is None
+
+
+def test_eta_endpoint_changes_with_distance(client):
+    test_client, app = client
+    login(test_client)
+
+    with app.app_context():
+        activity = Activity.query.filter_by(title="Calculus Sprint").first()
+
+    test_client.post(f"/activities/{activity.id}/join", follow_redirects=True)
+
+    nearby_response = test_client.post(
+        f"/activities/{activity.id}/eta",
+        json={"distance_km": 0.3},
+    )
+    far_response = test_client.post(
+        f"/activities/{activity.id}/eta",
+        json={"distance_km": 12},
+    )
+
+    assert nearby_response.status_code == 200
+    assert far_response.status_code == 200
+
+    nearby_payload = nearby_response.get_json()
+    far_payload = far_response.get_json()
+
+    assert nearby_payload["eta_status"] == "arriving_soon"
+    assert far_payload["eta_status"] == "delayed"
+    assert nearby_payload["eta_label"] != far_payload["eta_label"]
 
 
 def test_host_can_confirm_waitlisted_user(client):

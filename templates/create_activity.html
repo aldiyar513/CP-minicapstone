@@ -94,6 +94,7 @@
             <option {% if role.type == "Optional" %}selected{% endif %}>Optional</option>
           </select>
           <input type="number" name="role_needed" min="1" value="{{ role.needed }}" aria-label="needed count">
+          <button type="button" class="role-remove" data-remove-role aria-label="Remove role">×</button>
         </div>
         {% endfor %}
       </div>

@@ -14,7 +14,7 @@
       <h1>Manage your account</h1>
     </div>
   </div>
-  <form class="activity-form" method="post">
+  <form class="activity-form" method="post" enctype="multipart/form-data">
     <div class="form-grid">
       <label>
         Display name
@@ -32,10 +32,29 @@
         Area / neighborhood
         <input type="text" name="home_area" value="{{ form_data.home_area }}" required>
       </label>
-      <label class="full-span">
-        Profile photo URL
-        <input type="url" name="avatar_url" value="{{ form_data.avatar_url }}" placeholder="https://...">
-      </label>
+      <div class="full-span avatar-upload-field">
+        <p class="section-label" style="margin:0 0 0.1rem">Profile photo</p>
+        <div class="avatar-upload-row">
+          <span class="avatar-preview">
+            {% if form_data.avatar_url %}
+            <img src="{{ form_data.avatar_url }}" alt="Current photo">
+            {% else %}
+            {{ (form_data.name[:1])|upper if form_data.name else "?" }}
+            {% endif %}
+          </span>
+          <div class="avatar-upload-controls">
+            <label>
+              Upload a new photo
+              <input type="file" name="avatar_file" accept="image/png,image/jpeg,image/gif,image/webp" style="padding:0.5rem">
+              <small style="color:var(--muted);font-weight:400">png, jpg, gif or webp · max 4 MB</small>
+            </label>
+            <label>
+              …or paste a URL
+              <input type="url" name="avatar_url" value="{{ form_data.avatar_url }}" placeholder="https://...">
+            </label>
+          </div>
+        </div>
+      </div>
       <label class="full-span">
         Bio
         <textarea name="bio" rows="4" required>{{ form_data.bio }}</textarea>
